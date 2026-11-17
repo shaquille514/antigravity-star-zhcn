@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { runGit, Updater, UPDATE_REPO } from '../sidecars/pet/lib/updater.mjs';
 
@@ -112,6 +112,19 @@ function fixture(t) {
   });
   return { updater, root, data, git, initial, latest, get restarted() { return restarted; }, get fetches() { return fetches; } };
 }
+
+test('Git canonical paths and a checkout directory alias refer to the same plugin', async t => {
+  const f = fixture(t);
+  const alias = join(dirname(f.root), 'installed-alias');
+  symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const updater = new Updater({
+    root: alias, installedRoot: alias,
+    git: (cwd, args) => args[0] === 'rev-parse' && args[1] === '--show-toplevel' ? Promise.resolve(f.root) : runGit(cwd, args),
+  });
+  const local = await updater.local();
+  assert.equal(local.currentSha, f.initial);
+  assert.equal(local.canInstall, true);
+});
 
 test('a real update fast-forwards once, preserves settings and asks the host to restart', async t => {
   const f = fixture(t);

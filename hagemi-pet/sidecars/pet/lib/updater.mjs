@@ -1,7 +1,7 @@
 // Source-only updates from the public upstream. Git does the final fast-forward, so local work
 // and divergent history are never replaced. Nothing is installed by a background check.
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -44,7 +44,11 @@ export class Updater {
     try {
       // A copied plugin must not accidentally find a parent checkout and update that instead.
       const top = await this.git(['rev-parse', '--show-toplevel']);
-      if (resolve(top) !== this.root) throw new Error('not the plugin checkout');
+      if (resolve(top) !== this.root) {
+        // Git can expand Windows short paths (or a junction) while Node retains the alias.
+        const [canonicalTop, canonicalRoot] = await Promise.all([realpath(top), realpath(this.root)]);
+        if (canonicalTop !== canonicalRoot) throw new Error('not the plugin checkout');
+      }
       const sha = await this.git(['rev-parse', 'HEAD']);
       if (!SHA.test(sha)) throw new Error('invalid local commit');
       const dirty = !!await this.git(['status', '--porcelain', '--untracked-files=all']);

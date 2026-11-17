@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {Personality}=require('../src/renderer/personality.js');
 const {hostPlacement,ForegroundMonitor}=require('../src/domain/host-visibility.cjs');
-test('native heartbeat stays live while stationary and stale helper is replaced',async()=>{
+test('native heartbeat stays live while stationary and stale helper is replaced',{skip:process.platform!=='win32'},async()=>{
  const monitor=new ForegroundMonitor();try{
   const next=()=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('heartbeat timeout')),3500);monitor.once('change',s=>{clearTimeout(timer);resolve(s);});});
   let waiting=next();monitor.start();await waiting;
@@ -35,7 +35,7 @@ test('host placement fits negative-coordinate workspaces and hides small or inac
  assert.equal(hostPlacement({kind:'other',bounds:null},220),null);
  assert.equal(hostPlacement({kind:'host',bounds:{x:0,y:0,width:350,height:400}},220),null);
 });
-test('native foreground helper returns bounded metadata without interacting with windows',async()=>{
+test('native foreground helper returns bounded metadata without interacting with windows',{skip:process.platform!=='win32'},async()=>{
  const monitor=new ForegroundMonitor();try{const state=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('helper timeout')),5000);monitor.once('change',s=>{clearTimeout(timer);resolve(s);});monitor.start();});assert(['host','self','other','unknown'].includes(state.kind));}finally{monitor.stop();}
 });
 
