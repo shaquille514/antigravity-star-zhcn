@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-package-lock.json
+# The integrated source release tracks package-lock.json for npm ci.
 
 # Build & ASAR unpacking temporary files
 *.asar
