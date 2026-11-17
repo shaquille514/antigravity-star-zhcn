@@ -1,0 +1,49 @@
+{
+  "name": "antigravity-star-zhcn-suite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Antigravity 中文融合套件：桌面哈基米、气泡对话、个性人设、Cherry/Claude/Codex 吃醋、Dream Skin 与 Windows/WSL 桥接",
+  "scripts": {
+    "status": "node suite-cli.js status",
+    "install:suite": "node suite-cli.js install",
+    "launch": "node suite-cli.js launch",
+    "restore": "node suite-cli.js restore",
+    "wsl:plugin": "node suite-cli.js wsl-plugin install",
+    "hagemi:desktop": "node suite-cli.js hagemi desktop",
+    "hagemi:quit": "node suite-cli.js hagemi quit",
+    "hagemi:install": "node suite-cli.js hagemi install",
+    "hagemi:uninstall": "node suite-cli.js hagemi uninstall",
+    "preview:hagemi": "node hagemi-pet/tools/preview.mjs",
+    "start:hagemi": "node tools/launch.cjs hagemi",
+    "start:desktop-suite": "node tools/launch.cjs suite",
+    "start:widget": "node tools/launch.cjs widget",
+    "start:skin": "node tools/launch.cjs skin",
+    "start:both": "node tools/launch.cjs both",
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-native.ps1",
+    "build:installers": "node tools/build-installers.cjs",
+    "test:suite": "node --test Antigravity-Cat-Widget/test/runtime.test.cjs Antigravity-Cat-Widget/test/wsl-transcript.test.cjs Antigravity-Cat-Widget/test/gemini-chat.test.cjs Antigravity-Dream-Skin/test/runtime.test.cjs Antigravity-Dream-Skin/test/integration.test.cjs tools/source-hashes.test.cjs Antigravity-Cat-Widget/test/personality.test.cjs Antigravity-Cat-Widget/test/quota-cache.test.cjs shared/active-host.test.cjs",
+    "test:hagemi": "node --test hagemi-pet/test/brain.test.mjs hagemi-pet/test/chat.test.mjs hagemi-pet/test/content.test.mjs hagemi-pet/test/desktop.test.mjs hagemi-pet/test/director.test.mjs hagemi-pet/test/foreground.test.mjs hagemi-pet/test/monitor.test.mjs hagemi-pet/test/persona.test.mjs hagemi-pet/test/quota.test.mjs hagemi-pet/test/settings.test.mjs hagemi-pet/test/updater.test.mjs hagemi-pet/test/ls-client.test.mjs",
+    "test:i18n": "npm --prefix localization test && node localization/test/test-dream-skin-compat.js",
+    "test": "npm run test:suite && npm run test:hagemi && npm run test:i18n",
+    "verify:runtime": "node tools/verify-runtime.cjs",
+    "verify:installers": "node tools/verify-installers.cjs",
+    "verify:connection": "node tools/verify-connection-port.cjs"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "playwright": "1.64.1",
+    "sharp": "0.35.5"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shaquille514/antigravity-star-zhcn.git"
+  },
+  "homepage": "https://github.com/shaquille514/antigravity-star-zhcn#readme",
+  "bugs": {
+    "url": "https://github.com/shaquille514/antigravity-star-zhcn/issues"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

@@ -1,0 +1,610 @@
+const fs = require('fs');
+const path = require('path');
+const { JSDOM } = require('jsdom');
+
+const dictContent = fs.readFileSync(path.join(__dirname, '..', 'dict', 'zh-CN.json'), 'utf-8');
+const runtimeContent = fs.readFileSync(path.join(__dirname, '..', 'core', 'i18n-runtime.js'), 'utf-8');
+
+console.log('🧪 ============================================================');
+console.log('🧪 开始执行 Antigravity 汉化核心引擎自动化自查自验证测试套件');
+console.log('🧪 ============================================================\n');
+
+const mockHtml = `
+<!DOCTYPE html>
+<html>
+<head><title>Antigravity - AI Coding Assistant</title></head>
+<body>
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <button class="new-chat-btn">+ New Chat</button>
+    <div class="nav-item">Conversation History</div>
+    <div class="nav-item">Scheduled Tasks</div>
+    <div class="nav-item">Projects</div>
+    <div class="nav-item">CLI Project</div>
+    <div class="nav-item">Install IDE</div>
+  </div>
+
+  <!-- Settings Dialog - Account Tab -->
+  <div class="settings-modal" id="account-tab">
+    <h2>Account</h2>
+    <p class="subtitle">
+      Manage your plan, credentials, and general preferences.
+    </p>
+
+    <div class="card">
+      <label>Enable Telemetry</label>
+      <div class="desc">
+        When toggled on, Antigravity collects usage data to help Google enhance performance and features.
+      </div>
+    </div>
+
+    <div class="card">
+      <label>Marketing Emails</label>
+      <div class="desc">
+        Receive product updates, tips, and promotions from Google Antigravity via email.
+      </div>
+    </div>
+
+    <div class="card plan-card">
+      <div class="plan-title">Your Plan: Google AI Pro</div>
+      <div class="plan-desc">You can upgrade to a Google AI Ultra plan to receive higher rate limits.</div>
+      <button class="upgrade-btn">Upgrade</button>
+    </div>
+
+    <div class="card auth-card">
+      <div class="email-label">Email</div>
+      <button class="signout-btn">Sign Out</button>
+    </div>
+
+    <div class="footer-terms">
+      By using this app, you agree to its <a href="#">Terms of Service</a>
+    </div>
+  </div>
+
+  <!-- Settings Dialog - General Tab -->
+  <div class="settings-modal" id="general-tab">
+    <h2>General</h2>
+    <p>Configure agent execution, queued message delivery, and permissions.</p>
+
+    <div class="section">
+      <h3>Execution</h3>
+      <div class="item-title">Queued Messages</div>
+      <div class="item-desc">Configure when follow-up messages are sent.</div>
+      <button>Queue</button>
+      <button>Send Immediately</button>
+    </div>
+
+    <div class="section">
+      <h3>Agent Settings</h3>
+      <div class="item-title">Security Preset</div>
+      <div class="item-desc">
+        Choose a predefined security preset for the agent. This controls terminal auto-execution policy, and file access policy.
+      </div>
+      <a>Learn more about Default</a>
+    </div>
+
+    <div class="section">
+      <h3>Agent Behavior</h3>
+      <div class="item-title">Artifact Review Policy</div>
+      <div class="item-desc">
+        Specifies Agent's behavior when asking for review on artifacts, which are documents it creates to enable a richer conversation experience.
+      </div>
+      <div>Always Proceed</div>
+    </div>
+
+    <div class="section">
+      <h3>File Permissions</h3>
+      <div class="item-title">File Access Rules</div>
+      <div class="item-desc">Configure allowed and denied paths for file reads and writes.</div>
+      <button>Open</button>
+    </div>
+
+    <div class="section">
+      <h3>Terminal & Tooling Permissions</h3>
+      <div class="item-title">Terminal Commands</div>
+      <div class="item-desc">Configure allowed terminal commands.</div>
+      <div class="item-title">Commands Outside Sandbox</div>
+    </div>
+  </div>
+
+  <!-- Protected Code Area (MUST NOT BE TRANSLATED) -->
+  <div class="monaco-editor">
+    <div class="view-lines">
+      <code>const isPending = false; // Queue and Send Immediately</code>
+    </div>
+  </div>
+</body>
+</html>
+`;
+
+// Create JSDOM with script execution enabled
+const dom = new JSDOM(mockHtml, {
+  runScripts: 'dangerously',
+  pretendToBeVisual: true
+});
+const win = dom.window;
+
+// Setup globals on window
+win.__AGY_I18N_DATA__ = JSON.parse(dictContent);
+
+// Execute bundled preload script directly on window
+const bundledScript = `
+window.__AGY_I18N_DATA__ = ${dictContent};
+${runtimeContent}
+if (window.__AGY_RUN_FULL_SCAN__) {
+  window.__AGY_RUN_FULL_SCAN__();
+}
+`;
+
+win.eval(bundledScript);
+
+let passed = 0;
+let failed = 0;
+
+function assert(condition, message) {
+  if (condition) {
+    console.log(`✅ [PASS] ${message}`);
+    passed++;
+  } else {
+    console.error(`❌ [FAIL] ${message}`);
+    failed++;
+  }
+}
+
+console.log('--- 1. 验证侧边栏汉化 ---');
+assert(win.document.querySelector('.sidebar .new-chat-btn').textContent.includes('新建对话'), '侧边栏按钮 "+ New Chat" -> "+ 新建对话"');
+assert(win.document.querySelector('.sidebar').textContent.includes('历史会话'), '侧边栏 "Conversation History" -> "历史会话"');
+assert(win.document.querySelector('.sidebar').textContent.includes('定时任务'), '侧边栏 "Scheduled Tasks" -> "定时任务"');
+assert(win.document.querySelector('.sidebar').textContent.includes('项目列表'), '侧边栏 "Projects" -> "项目列表"');
+assert(win.document.querySelector('.sidebar').textContent.includes('安装 IDE'), '侧边栏 "Install IDE" -> "安装 IDE"');
+
+console.log('\n--- 2. 验证账户面板 (Account Tab) 全量汉化 ---');
+const accountTab = win.document.getElementById('account-tab');
+assert(accountTab.querySelector('h2').textContent === '账户', '标题 "Account" -> "账户"');
+assert(accountTab.querySelector('.subtitle').textContent.includes('管理您的套餐方案、凭据及通用偏好。'), '副标题段落正确翻译');
+assert(accountTab.querySelector('.card label').textContent.includes('启用遥测诊断'), '"Enable Telemetry" -> "启用遥测诊断"');
+assert(accountTab.textContent.includes('开启后，Antigravity 将收集使用数据以帮助 Google 提升性能与产品功能。'), '遥测长段落说明正确翻译');
+assert(accountTab.textContent.includes('营销与产品动态邮件'), '"Marketing Emails" -> "营销与产品动态邮件"');
+assert(accountTab.textContent.includes('通过电子邮件接收来自 Google Antigravity 的产品更新、使用技巧与促销信息。'), '营销邮件长段落说明正确翻译');
+assert(accountTab.querySelector('.plan-title').textContent.includes('当前方案：Google AI Pro 专业版') || accountTab.querySelector('.plan-title').textContent.includes('当前方案') || accountTab.querySelector('.plan-title').textContent.includes('专业版'), '"Your Plan: Google AI Pro" 复合子句正确翻译');
+assert(accountTab.textContent.includes('您可以升级至 Google AI Ultra 以获取更高的请求配额与速率上限。'), '升级说明长段落正确翻译');
+assert(accountTab.querySelector('.upgrade-btn').textContent === '立即升级', '"Upgrade" 按钮 -> "立即升级"');
+assert(accountTab.querySelector('.email-label').textContent === '电子邮箱', '"Email" -> "电子邮箱"');
+assert(accountTab.querySelector('.signout-btn').textContent === '退出登录', '"Sign Out" 按钮 -> "退出登录"');
+assert(accountTab.querySelector('.footer-terms a').textContent === '服务条款', '嵌套链接 "Terms of Service" -> "服务条款"');
+assert(accountTab.querySelector('.footer-terms').textContent.includes('使用此应用即表示您同意其'), '服务条款引导语正确翻译');
+
+console.log('\n--- 3. 验证通用面板 (General Tab) 全量汉化 ---');
+const generalTab = win.document.getElementById('general-tab');
+assert(generalTab.querySelector('h2').textContent === '通用', '标题 "General" -> "通用"');
+assert(generalTab.textContent.includes('配置智能体执行策略、排队消息发送规则及权限。'), '通用设置总说明正确翻译');
+assert(generalTab.textContent.includes('执行策略'), '"Execution" -> "执行策略"');
+assert(generalTab.textContent.includes('排队消息'), '"Queued Messages" -> "排队消息"');
+assert(generalTab.textContent.includes('排队等待'), '"Queue" -> "排队等待"');
+assert(generalTab.textContent.includes('立即发送'), '"Send Immediately" -> "立即发送"');
+assert(generalTab.textContent.includes('安全预设'), '"Security Preset" -> "安全预设"');
+assert(generalTab.textContent.includes('为智能体选择预定义的安全预设，用于控制终端自动执行与文件访问策略。'), '安全预设长段落正确翻译');
+assert(generalTab.textContent.includes('产物审查策略'), '"Artifact Review Policy" -> "产物审查策略"');
+assert(generalTab.textContent.includes('指定智能体在创建产物文档时请求用户审查与反馈的行为策略。'), '审查策略长段落正确翻译');
+assert(generalTab.textContent.includes('总是直接继续'), '"Always Proceed" -> "总是直接继续"');
+assert(generalTab.textContent.includes('文件访问规则'), '"File Access Rules" -> "文件访问规则"');
+assert(generalTab.textContent.includes('配置文件读写的允许与禁止路径。'), '文件访问长段落正确翻译');
+assert(generalTab.textContent.includes('终端命令权限'), '"Terminal Commands" -> "终端命令权限"');
+assert(generalTab.textContent.includes('沙箱外命令执行'), '"Commands Outside Sandbox" -> "沙箱外命令执行"');
+
+console.log('\n--- 4. 验证代码保护机制（确保不误伤代码与终端） ---');
+const codeContent = win.document.querySelector('.monaco-editor code').textContent;
+assert(codeContent === 'const isPending = false; // Queue and Send Immediately', 'Monaco Editor 与代码区内容被严格保护，未被误翻译！');
+
+console.log('\n--- 4.1 验证智能体状态机与 MCP 工具全量汉化 ---');
+const translate = win.__AGY_TRANSLATE_UNIT__;
+assert(translate('Worked for 1s') === '已运行 1 秒', '"Worked for 1s" -> "已运行 1 秒"');
+assert(translate('Worked for 12s') === '已运行 12 秒', '"Worked for 12s" -> "已运行 12 秒"');
+assert(translate('Worked for 1m') === '已运行 1 分钟', '"Worked for 1m" -> "已运行 1 分钟"');
+assert(translate('Worked for 1m 24s') === '已运行 1 分 24 秒', '"Worked for 1m 24s" -> "已运行 1 分 24 秒"');
+assert(translate('Stopped after 1s') === '在 1 秒后停止', '"Stopped after 1s" -> "在 1 秒后停止"');
+assert(translate('Stopped after 1m 24s') === '在 1 分 24 秒后停止', '"Stopped after 1m 24s" -> "在 1 分 24 秒后停止"');
+assert(translate('Message from Deep Investigator (DeepInvestigator)') === '来自 Deep Investigator (DeepInvestigator) 的消息', '"Message from ..." 消息折叠栏汉化通过');
+assert(translate('Working...') === '正在运行...', '"Working..." 状态汉化通过');
+assert(translate('External tools the agent can call via Model Context Protocol.') === '智能体可通过模型上下文协议 (Model Context Protocol) 调用的外部工具。', 'MCP 权限卡片说明汉化通过');
+assert(translate('Configure MCP Server') === '配置 MCP 服务', 'MCP 服务配置项汉化通过');
+assert(translate('Search MCP servers by name') === '按名称搜索 MCP 服务', 'MCP 搜索项汉化通过');
+assert(translate('Inherits your Global Permissions when working in this project.') === '在此项目中工作时，继承您的全局权限。', '项目安全预设气泡 Tooltip 汉化通过');
+assert(translate('Inherits your Global Permissions 在此项目中工作时。') === '在此项目中工作时，继承您的全局权限。', '项目安全预设气泡中英混合拼接残缺态自愈汉化通过');
+assert(translate('Also includes Global Permissions when working in this project.') === '在此项目中工作时也包含全局权限。', '项目本地权限说明长句汉化通过');
+assert(translate('Also includes Global Permissions when working in this project. Learn more.') === '在此项目中工作时也包含全局权限。了解更多。', '项目本地权限包含了解更多长句汉化通过');
+assert(translate('Resets in 4d 13h') === '4 天 13 小时后重置', '模型配额悬浮卡片 "Resets in 4d 13h" 汉化通过');
+assert(translate('Resets in 2h 35m') === '2 小时 35 分钟后重置', '模型配额悬浮卡片 "Resets in 2h 35m" 汉化通过');
+assert(translate('Resets in 4d') === '4 天后重置', '模型配额单段天数 "Resets in 4d" 汉化通过');
+assert(translate('Resets in 2h') === '2 小时后重置', '模型配额单段小时 "Resets in 2h" 汉化通过');
+assert(translate('Refreshes in 4d 13h') === '4 天 13 小时后重置刷新', '模型配额 "Refreshes in 4d 13h" 汉化通过');
+
+console.log('\n--- 4.2 验证 v2.15.0 新特性与漏项汉化 ---');
+assert(translate('Contrast') === '对比度', '"Contrast" -> "对比度"');
+assert(translate('Strong') === '高对比度', '"Strong" -> "高对比度"');
+assert(translate('+ New') === '+ 新建', '"+ New" -> "+ 新建"');
+assert(translate('New') === '新建', '"New" -> "新建"');
+assert(translate('Search tasks...') === '搜索任务...', '"Search tasks..." -> "搜索任务..."');
+assert(translate('No scheduled tasks configured.') === '尚未配置任何定时任务。', '定时任务空状态提示通过');
+assert(translate('New Scheduled Task') === '新建定时任务', '"New Scheduled Task" -> "新建定时任务"');
+assert(translate('scheduled task') === '定时任务', '"scheduled task" -> "定时任务"');
+assert(translate('s run as Flash.') === '均以 Flash 模型运行。', '"s run as Flash." -> "均以 Flash 模型运行。"');
+assert(translate('Enter scheduled task name...') === '输入定时任务名称...', '定时任务名称占位符通过');
+assert(translate('Enter a prompt for the agent to run...') === '输入供智能体执行的提示词...', '定时任务提示词占位符通过');
+assert(translate('All scheduled tasks run as Flash.') === '所有定时任务均以 Flash 模型运行。', '全部定时任务运行说明通过');
+assert(translate('全部 scheduled tasks run as Flash.') === '所有定时任务均以 Flash 模型运行。', '中英残缺混合态自愈汉化通过');
+assert(translate('Search conversations...') === '搜索会话...', '"Search conversations..." -> "搜索会话..."');
+assert(translate('Display') === '显示方式', '"Display" -> "显示方式"');
+assert(translate('Project + Worktree') === '项目 + 工作树', '"Project + Worktree" -> "项目 + 工作树"');
+assert(translate('Only Unread') === '仅未读', '"Only Unread" -> "仅未读"');
+assert(translate('Queue until after the current turn.') === '排队等待，直至当前轮次结束。', '"Queue until after the current turn." -> "排队等待，直至当前轮次结束。"');
+assert(translate('Interrupt the agent and send immediately.') === '打断智能体并立即发送。', '"Interrupt the agent and send immediately." -> "打断智能体并立即发送。"');
+assert(translate('Copy Conversation Markdown') === '复制会话 Markdown', '会话操作 "Copy Conversation Markdown" 通过');
+assert(translate('Product Skin') === '产品界面风格', '外观设置 "Product Skin" 通过');
+assert(translate('Workspace CL Status') === '工作区 CL 状态', '审查联动 "Workspace CL Status" 通过');
+assert(translate('Create a Plugin with the Agent') === '与智能体一起创建插件', '插件市场 "Create a Plugin with the Agent" 通过');
+
+// 验证 React 碎片化模板容器联合自愈 (All , e, s run as Flash.)
+const mockFragmentSpan = win.document.createElement('span');
+mockFragmentSpan.className = 'text-xs text-muted-foreground';
+const node1 = win.document.createTextNode('All ');
+const node2 = win.document.createTextNode('scheduled task');
+const node3 = win.document.createTextNode('s run as Flash.');
+mockFragmentSpan.appendChild(node1);
+mockFragmentSpan.appendChild(node2);
+mockFragmentSpan.appendChild(node3);
+win.document.body.appendChild(mockFragmentSpan);
+
+win.__AGY_TRANSLATE_EL__(mockFragmentSpan);
+assert(mockFragmentSpan.textContent === '所有定时任务均以 Flash 模型运行。', 'React 碎片化模板容器联合自愈为整句通过！');
+assert(mockFragmentSpan.childNodes.length === 3, '联合自愈保持子节点树结构稳定 (length: 3)');
+
+// 验证跨内联元素语序重排自愈 ("Also includes", " ", <span>Global Permissions</span>, " ", "when working in this project.")
+const mockPermContainer = win.document.createElement('span');
+mockPermContainer.appendChild(win.document.createTextNode('Also includes'));
+mockPermContainer.appendChild(win.document.createTextNode(' '));
+const mockGlobalPermLink = win.document.createElement('span');
+mockGlobalPermLink.textContent = 'Global Permissions';
+mockPermContainer.appendChild(mockGlobalPermLink);
+mockPermContainer.appendChild(win.document.createTextNode(' '));
+mockPermContainer.appendChild(win.document.createTextNode('when working in this project.'));
+win.document.body.appendChild(mockPermContainer);
+
+win.__AGY_TRANSLATE_EL__(mockPermContainer);
+assert(mockPermContainer.textContent.includes('全局权限') && mockPermContainer.textContent.includes('在此项目中工作时') && !mockPermContainer.textContent.includes('when working'), '跨内联元素顺应宿主原版 DOM 汉化彻底消灭英文残留');
+assert(mockGlobalPermLink.textContent === '全局权限', '内联可点击 <span>Global Permissions</span> 独立翻译且 DOM 引用完好保留');
+assert(translate('toString') === null && translate('constructor') === null, 'Object.prototype 原型链同名属性防碰撞断言通过');
+
+
+
+
+console.log('\n--- 5. 验证 Antigravity 官方插件套件完整性 ---');
+const pluginJsonPath = path.join(__dirname, '..', 'plugins', 'chinese-toolkit', 'plugin.json');
+assert(fs.existsSync(pluginJsonPath), '插件清单 plugins/chinese-toolkit/plugin.json 存在');
+const pluginData = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf-8'));
+assert(pluginData.name === 'antigravity-chinese-toolkit', '插件名称规范对齐 antigravity-chinese-toolkit');
+
+const rulesPath = path.join(__dirname, '..', 'plugins', 'chinese-toolkit', 'rules', 'chinese-interaction-rules.md');
+assert(fs.existsSync(rulesPath), '插件规则 rules/chinese-interaction-rules.md 存在且非空');
+
+const skillPath = path.join(__dirname, '..', 'plugins', 'chinese-toolkit', 'skills', 'i18n-diagnostics', 'SKILL.md');
+assert(fs.existsSync(skillPath), '插件技能 skills/i18n-diagnostics/SKILL.md 存在');
+const skillContent = fs.readFileSync(skillPath, 'utf-8');
+assert(skillContent.includes('name: i18n-diagnostics'), '插件技能包含合法 YAML frontmatter 定义');
+
+console.log('\n--- 6. 验证跨平台路径探测器 (macOS / Linux / Windows) ---');
+const { getCandidateAsarPaths } = require('../cli');
+
+// 1. Windows 候选路径校验
+const winPaths = getCandidateAsarPaths('win32', 'C:\\Users\\TestUser');
+assert(winPaths.length >= 3, 'Windows 包含至少 3 组候选路径');
+assert(winPaths.some(p => p.includes('AppData') && p.includes('antigravity')), 'Windows 包含 LocalAppData 路径');
+assert(winPaths.some(p => p.includes('Program Files') && p.includes('antigravity')), 'Windows 包含 ProgramFiles 路径');
+
+// 2. macOS 候选路径校验
+const macPaths = getCandidateAsarPaths('darwin', '/Users/TestUser').map(p => p.replace(/\\/g, '/'));
+assert(macPaths.length >= 2, 'macOS 包含系统与用户级 2 组候选路径');
+assert(macPaths.includes('/Applications/Antigravity.app/Contents/Resources/app.asar'), 'macOS 包含全局 /Applications 路径');
+assert(macPaths.includes('/Users/TestUser/Applications/Antigravity.app/Contents/Resources/app.asar'), 'macOS 包含用户级 Applications 路径');
+
+// 3. Linux 候选路径校验
+const linuxPaths = getCandidateAsarPaths('linux', '/home/testuser').map(p => p.replace(/\\/g, '/'));
+assert(linuxPaths.length >= 4, 'Linux 包含 /opt, /usr/lib, /usr/share, ~/.local 4 组候选路径');
+assert(linuxPaths.includes('/opt/antigravity/resources/app.asar'), 'Linux 包含 /opt 路径');
+assert(linuxPaths.includes('/usr/lib/antigravity/resources/app.asar'), 'Linux 包含 /usr/lib 路径');
+assert(linuxPaths.includes('/usr/share/antigravity/resources/app.asar'), 'Linux 包含 /usr/share 路径');
+assert(linuxPaths.includes('/home/testuser/.local/share/antigravity/resources/app.asar'), 'Linux 包含 ~/.local/share 路径');
+
+console.log('\n--- 7. 验证 v3.2.35 性能黑洞修复与引擎优化断言 ---');
+// 1. 算法极速短路：纯数字与纯符号瞬间退出
+assert(translate('123456') === null, '纯数字 "123456" 极速短路返回 null');
+assert(translate('---') === null, '纯符号 "---" 极速短路返回 null');
+assert(translate('###') === null, '纯标点 "###" 极速短路返回 null');
+
+// 2. DOM 否定标记断言（未命中节点与属性）
+const mockDiv = win.document.createElement('div');
+mockDiv.setAttribute('title', 'hash_3f8a92c1_unmatched');
+const mockTextNode = win.document.createTextNode('/users/local/path/to/unmatched_file.js');
+const mockWhitespaceNode = win.document.createTextNode('   \n  ');
+mockDiv.appendChild(mockTextNode);
+mockDiv.appendChild(mockWhitespaceNode);
+win.document.body.appendChild(mockDiv);
+
+win.__AGY_TRANSLATE_EL__(mockDiv);
+assert(mockTextNode._agyOriginal === '/users/local/path/to/unmatched_file.js', '未命中 TextNode 正确打上 DOM 否定标记 _agyOriginal');
+assert(mockWhitespaceNode._agyOriginal === '   \n  ', '纯空白 TextNode 正确打上 DOM 否定标记 _agyOriginal 避免重复 trim');
+assert(mockDiv['_agyDone_title'] === 'hash_3f8a92c1_unmatched', '未命中属性正确打上 DOM 否定标记 _agyDone_title');
+
+// 3. Step 5 长度与空格门禁断言
+assert(translate('shortword') === null, '无空格且短于 12 字符的文本直接门禁拦截返回 null');
+assert(translate('a'.repeat(11)) === null, '11 字符无空格文本门禁拦截返回 null');
+
+// 4. 双向 Map 缓存正向与负向记忆化断言
+assert(translate('Save') === '保存', '正向翻译 "Save" -> "保存"');
+const cache = win.__AGY_CACHE__;
+assert(cache !== null, '双向 Map 缓存存在并已初始化');
+assert(cache.has('Save'), '正向命中条目 "Save" 成功存入双向缓存');
+assert(cache.get('Save') === '保存', '正向缓存条目内容准确');
+assert(cache.has('shortword'), '负向未命中条目 "shortword" 成功存入双向缓存');
+assert(cache.get('shortword') === null, '负向缓存条目值为 null');
+
+// 验证缓存容量上限保护机制（10,000 上限与 1,000 项批量淘汰）
+const initialCacheSize = cache.size;
+for (let i = 0; i < 10005; i++) {
+  translate(`cache_test_key_${i}`);
+}
+assert(cache.size <= 10000, `缓存容量超限触发淘汰保护，当前容量: ${cache.size} (<= 10000)`);
+
+// 5. 悬浮门禁过滤 isFloatingElement 严谨断言
+const isFloating = win.__AGY_IS_FLOATING__;
+const workbenchEl = win.document.createElement('div');
+workbenchEl.id = 'workbench';
+assert(!isFloating(workbenchEl), 'isFloatingElement 坚决排除 #workbench');
+
+const workbenchClassEl = win.document.createElement('div');
+workbenchClassEl.className = 'monaco-workbench';
+assert(!isFloating(workbenchClassEl), 'isFloatingElement 坚决排除 .monaco-workbench');
+
+const tooltipEl = win.document.createElement('div');
+tooltipEl.setAttribute('role', 'tooltip');
+assert(isFloating(tooltipEl), 'isFloatingElement 准确放行 [role="tooltip"]');
+
+const portalEl = win.document.createElement('div');
+portalEl.setAttribute('data-floating-ui-portal', '');
+assert(isFloating(portalEl), 'isFloatingElement 准确放行 [data-floating-ui-portal]');
+
+const monacoHoverEl = win.document.createElement('div');
+monacoHoverEl.className = 'monaco-hover fade-in';
+assert(isFloating(monacoHoverEl), 'isFloatingElement 准确放行 .monaco-hover');
+
+// 6. 历史会话下线通知横幅（跨内联图标与子元素）DOM 翻译验证
+const historyBanner = win.document.createElement('div');
+historyBanner.innerHTML =
+  '<span class="font-medium text-foreground">This page is going away soon</span>' +
+  '<span id="hb-search">Search conversations with <svg aria-label="search"></svg> in the top left.</span>' +
+  '<span id="hb-archived">View archived in the sidebar <span class="whitespace-nowrap">(<svg aria-label="filter"></svg> menu)</span>.</span>';
+win.document.body.appendChild(historyBanner);
+win.__AGY_TRANSLATE_EL__(historyBanner);
+assert(historyBanner.children[0].textContent === '此页面即将下线', '历史会话横幅标题准确汉化为“此页面即将下线”');
+assert(historyBanner.querySelector('#hb-search').textContent === '可通过左上角的  图标搜索会话。', '历史会话横幅搜索提示跨内联图标准确汉化');
+assert(historyBanner.querySelector('#hb-archived').textContent === '可在侧边栏查看已归档会话 ( 菜单)。', '历史会话横幅归档提示跨内联图标与句末句号准确汉化');
+
+// 7. 验证 v2.25.0 与 v1.9.0 新增核心词条与查看器体系
+console.log('\n--- 4.10 验证 v2.25.0 与 v1.9.0 新增特性汉化 ---');
+assert(translate('Sidebar Updates') === '侧边栏更新', '"Sidebar Updates" -> "侧边栏更新"');
+assert(translate('Show or Hide Plugins') === '显示或隐藏插件', '"Show or Hide Plugins" -> "显示或隐藏插件"');
+assert(translate('Sidecar View') === 'Sidecar 视图', '"Sidecar View" -> "Sidecar 视图"');
+assert(translate('Creating Sidecar') === '正在创建 Sidecar', '"Creating Sidecar" -> "正在创建 Sidecar"');
+assert(translate('Auto-assignment not configured') === '未配置自动分配', '"Auto-assignment not configured" -> "未配置自动分配"');
+assert(translate('Create Cloud Project') === '创建云端项目', '"Create Cloud Project" -> "创建云端项目"');
+assert(translate('License Required') === '需要许可证', '"License Required" -> "需要许可证"');
+assert(translate('Manage License') === '管理许可证', '"Manage License" -> "管理许可证"');
+assert(translate('View Stacked Diff') === '查看堆叠差异', '"View Stacked Diff" -> "查看堆叠差异"');
+assert(translate('Artifact Viewer') === '产物查看器', '"Artifact Viewer" -> "产物查看器"');
+assert(translate('Selected model does not support this media type') === '所选模型不支持此媒体类型', '多模态不支持提示汉化通过');
+assert(translate('Accept Focused Change') === '接受当前选中的更改', '"Accept Focused Change" -> "接受当前选中的更改"');
+assert(translate('Manage Data Sharing & Telemetry') === '管理数据共享与遥测', '"Manage Data Sharing & Telemetry" -> "管理数据共享与遥测"');
+assert(translate('Show system notifications when your action is needed or the agent finishes.') === '当需要您采取操作或智能体完成任务时，显示系统通知。', '智能体系统通知描述汉化通过');
+assert(translate('Play a sound when your action is needed or the agent finishes.') === '当需要您采取操作或智能体完成任务时，播放提示音。', '智能体提示音描述汉化通过');
+
+// 8. 验证老宋实测四大关键漏项与 v2.26.0 核心演进断言
+console.log('\n--- 4.11 验证 v2.26.0 与老宋实测四大漏项汉化 ---');
+assert(translate('No extensions available') === '暂无可用扩展', '"No extensions available" -> "暂无可用扩展"');
+assert(translate('Search tabs, files, extensions, subagents, artifacts, tasks...') === '搜索标签页、文件、扩展、子智能体、产物、任务...', '快速打开多功能搜索栏占位符汉化通过');
+assert(translate('Give Feedback') === '提供反馈', '"Give Feedback" -> "提供反馈"');
+assert(translate('Click to respond to the questions.') === '点击以回答问题。', '问卷交互卡片提示汉化通过');
+assert(translate('Cancel Questionnaire and Stop the Agent') === '取消问卷并停止智能体', '取消问卷按钮汉化通过');
+assert(translate('Voice Mode') === '语音模式', '"Voice Mode" -> "语音模式"');
+assert(translate('Voice engine address') === '语音引擎地址', '"Voice engine address" -> "语音引擎地址"');
+assert(translate('Stage and amend all changes into the current commit') === '暂存并追加合并所有更改至当前提交', 'Git Amend 操作描述汉化通过');
+assert(translate('New Remote Project') === '新建远程项目', '"New Remote Project" -> "新建远程项目"');
+assert(translate('New models have been enabled for you!') === '已为您启用新模型！', '新模型启用通知汉化通过');
+
+// 验证跨内联元素（含 span 包装或混合态）汉化彻底消灭英文残留
+const nestedSpanContainer = win.document.createElement('div');
+nestedSpanContainer.innerHTML = '<span>也包含</span> <span>全局权限</span> <span>when working in this project.</span> <a href="#">了解更多。</a>';
+win.document.body.appendChild(nestedSpanContainer);
+win.__AGY_TRANSLATE_EL__(nestedSpanContainer);
+assert(nestedSpanContainer.textContent.includes('全局权限') && nestedSpanContainer.textContent.includes('此项目') && !nestedSpanContainer.textContent.includes('when working in this project'), '嵌套 span 场景顺应宿主原版 DOM 汉化彻底消灭英文残留');
+
+// 9. 验证 v2.27.0 核心演进断言
+console.log('\n--- 4.12 验证 v2.27.0 新特性与 WSL 协同汉化 ---');
+assert(translate('Setting up WSL:') === '正在准备 WSL 环境：', '"Setting up WSL:" -> "正在准备 WSL 环境："');
+assert(translate('Downloading the Antigravity binary…') === '正在下载 Antigravity 二进制组件…', 'WSL 二进制下载状态汉化通过');
+assert(translate('Update: Mode') === '更新策略', '"Update: Mode" -> "更新策略"');
+assert(translate('Language Server process is not running.') === '语言服务器进程未在运行。', '语言服务器未运行提示汉化通过');
+
+// 10. 验证老宋实测漏项（配额用量、剩余百分比、5小时限额与未归属项目会话语序自愈）
+console.log('\n--- 4.13 验证老宋实测四大核心漏项攻坚断言 ---');
+assert(translate('Usage') === '用量', '"Usage" -> "用量"');
+assert(translate('97% left') === '剩余 97%', '"97% left" -> "剩余 97%"');
+assert(translate('91% left') === '剩余 91%', '"91% left" -> "剩余 91%"');
+assert(translate('100% left') === '剩余 100%', '"100% left" -> "剩余 100%"');
+assert(translate('5h limit') === '5 小时限额', '"5h limit" -> "5 小时限额"');
+assert(translate('12h limit') === '12 小时限额', '"12h limit" -> "12 小时限额"');
+assert(translate('Inherits your Global Permissions when working in these conversations.') === '在此类会话中工作时，继承您的全局权限。', '会话列表继承全局权限下拉描述汉化通过');
+
+const convSpanContainer = win.document.createElement('div');
+convSpanContainer.innerHTML = '<span>包含</span> <span>全局权限</span> <span>when working in these conversations.</span> <a href="#">了解更多。</a>';
+win.document.body.appendChild(convSpanContainer);
+win.__AGY_TRANSLATE_EL__(convSpanContainer);
+assert(convSpanContainer.textContent.includes('全局权限') && convSpanContainer.textContent.includes('此类会话') && !convSpanContainer.textContent.includes('when working in these conversations'), '会话列表顺应宿主原版 DOM 汉化消灭英文残留');
+
+// 真实 React JSX 兄弟 TextNode 拆分场景全量覆盖断言
+const projectSplitContainer = win.document.createElement('div');
+const pSpan = win.document.createElement('span');
+pSpan.textContent = '也包含';
+projectSplitContainer.appendChild(pSpan);
+projectSplitContainer.appendChild(win.document.createTextNode(' '));
+const pA = win.document.createElement('a');
+pA.textContent = '全局权限';
+projectSplitContainer.appendChild(pA);
+projectSplitContainer.appendChild(win.document.createTextNode(' '));
+// 场景 1: when working in + this project.
+const pTn1 = win.document.createTextNode('when working in ');
+projectSplitContainer.appendChild(pTn1);
+const pTn2 = win.document.createTextNode('this project.');
+projectSplitContainer.appendChild(pTn2);
+projectSplitContainer.appendChild(win.document.createTextNode(' '));
+const pMore = win.document.createElement('a');
+pMore.textContent = '了解更多。';
+projectSplitContainer.appendChild(pMore);
+win.document.body.appendChild(projectSplitContainer);
+win.__AGY_TRANSLATE_EL__(projectSplitContainer);
+assert(projectSplitContainer.textContent.includes('全局权限') && projectSplitContainer.textContent.includes('此项目') && !projectSplitContainer.textContent.includes('when working'), '项目设置 React 兄弟 TextNode 拆分顺应原版 DOM 汉化彻底消灭英文残留');
+
+// 场景 2: 现场抓包高精复现——when working + in this project. 拆分与多轮渲染幂等性断言
+const liveSplitContainer = win.document.createElement('div');
+const liveSpan = win.document.createElement('span');
+liveSpan.textContent = '也包含';
+liveSplitContainer.appendChild(liveSpan);
+liveSplitContainer.appendChild(win.document.createTextNode(' '));
+const liveA = win.document.createElement('a');
+liveA.textContent = '全局权限';
+liveSplitContainer.appendChild(liveA);
+liveSplitContainer.appendChild(win.document.createTextNode(' '));
+const liveTn1 = win.document.createTextNode('when working ');
+liveSplitContainer.appendChild(liveTn1);
+const liveTn2 = win.document.createTextNode('in this project.');
+liveSplitContainer.appendChild(liveTn2);
+liveSplitContainer.appendChild(win.document.createTextNode(' '));
+const liveMore = win.document.createElement('a');
+liveMore.textContent = '了解更多。';
+liveSplitContainer.appendChild(liveMore);
+win.document.body.appendChild(liveSplitContainer);
+// 连续执行三轮重排，确保幂等不退化
+for (let r = 0; r < 3; r++) {
+  win.__AGY_TRANSLATE_EL__(liveSplitContainer);
+}
+assert(liveSplitContainer.textContent.includes('全局权限') && !liveSplitContainer.textContent.includes('when working') && !/\bin\b/i.test(liveSplitContainer.textContent), '现场抓包拆分形态顺应宿主原版 DOM 汉化消灭残渣 in 且多轮渲染完美幂等');
+
+const convSplitContainer = win.document.createElement('div');
+const cSpan = win.document.createElement('span');
+cSpan.textContent = '也包含';
+convSplitContainer.appendChild(cSpan);
+convSplitContainer.appendChild(win.document.createTextNode(' '));
+const cA = win.document.createElement('a');
+cA.textContent = '全局权限';
+convSplitContainer.appendChild(cA);
+convSplitContainer.appendChild(win.document.createTextNode(' '));
+const cTn1 = win.document.createTextNode('when working ');
+convSplitContainer.appendChild(cTn1);
+const cTn2 = win.document.createTextNode('in these conversations.');
+convSplitContainer.appendChild(cTn2);
+convSplitContainer.appendChild(win.document.createTextNode(' '));
+const cMore = win.document.createElement('a');
+cMore.textContent = '了解更多。';
+convSplitContainer.appendChild(cMore);
+win.document.body.appendChild(convSplitContainer);
+for (let r = 0; r < 3; r++) {
+  win.__AGY_TRANSLATE_EL__(convSplitContainer);
+}
+assert(convSplitContainer.textContent.includes('全局权限') && !convSplitContainer.textContent.includes('when working') && !/\bin\b/i.test(convSplitContainer.textContent), '会话列表 React 兄弟 TextNode 拆分顺应原版 DOM 汉化消灭英文残留');
+
+// 11. 验证 v2.28.0 Script Jail 安全沙箱与连接隔离断言
+console.log('\n--- 4.14 验证 v2.28.0 Script Jail 安全沙箱与连接隔离汉化 ---');
+assert(translate('Script aborted by host') === '脚本已被宿主中止', '沙箱中止提示汉化');
+assert(translate('Script execution failed') === '脚本执行失败', '沙箱执行失败提示汉化');
+assert(translate('Worker execution failed') === 'Worker 执行失败', 'Worker 异常提示汉化');
+assert(translate('Script execution has already finished') === '脚本执行已完成', '沙箱已结束提示汉化');
+assert(translate('Script return value is not JSON-serializable') === '脚本返回值无法被 JSON 序列化', '序列化报错汉化');
+assert(translate('Script jail WebContents was destroyed') === '脚本沙箱 WebContents 已销毁', '沙箱容器销毁提示汉化');
+assert(translate('Unauthorized script-jail sender: subframe cannot invoke script jail') === '未授权的脚本沙箱发送方：子框架无法调用脚本沙箱', '子框架权限阻断汉化');
+
+// 12. 验证老宋实测五大新漏项（工作树检出/此电脑/后台命令/搜索栏占位符/内置浏览器设置）
+console.log('\n--- 4.15 验证老宋实测五大新漏项专项攻坚断言 ---');
+assert(translate('Local Checkout') === '本地检出', '"Local Checkout" -> "本地检出"');
+assert(translate('This Computer') === '此电脑', '"This Computer" -> "此电脑"');
+assert(translate('Background Commands') === '后台命令', '"Background Commands" -> "后台命令"');
+assert(translate('Background Commands 44 >') === '后台命令 44 >', '"Background Commands 44 >" 正则汉化通过');
+assert(translate('Background Commands 44') === '后台命令 44', '"Background Commands 44" 正则汉化通过');
+assert(translate('Search tabs, files, extensions, subagents, artifacts, commands...') === '搜索标签页、文件、扩展、子智能体、产物、命令...', 'Aux Pane 搜索框完整占位符汉化通过');
+assert(translate('Search tabs, files, extensions, subagents, artifacts, commands') === '搜索标签页、文件、扩展、子智能体、产物、命令', '搜索框无省略号占位符汉化通过');
+assert(translate('Built-In Browser') === '内置浏览器', '"Built-In Browser" -> "内置浏览器"');
+assert(translate('Configure link opening and built-in browser preferences.') === '配置链接打开方式与内置浏览器偏好设置。', '内置浏览器偏好设置描述汉化通过');
+assert(translate('Open Links In') === '链接打开方式', '"Open Links In" -> "链接打开方式"');
+assert(translate('Choose where links open by default when clicked.') === '选择点击链接时的默认打开方式。', '链接打开方式说明汉化通过');
+assert(translate('External Browser') === '外部浏览器', '"External Browser" -> "外部浏览器"');
+
+// DOM 属性占位符测试
+const searchInput = win.document.createElement('input');
+searchInput.setAttribute('placeholder', 'Search tabs, files, extensions, subagents, artifacts, commands...');
+win.document.body.appendChild(searchInput);
+win.__AGY_TRANSLATE_EL__(searchInput);
+assert(searchInput.getAttribute('placeholder') === '搜索标签页、文件、扩展、子智能体、产物、命令...', 'input placeholder 属性节点动态汉化通过');
+
+// 13. 验证老宋实测快捷键、会话轮次大纲导航轨与时间轴悬浮卡片断言
+console.log('\n--- 4.16 验证老宋实测快捷键与会话大纲时间轴导航轨汉化 ---');
+assert(translate('Search shortcuts...') === '搜索快捷键...', '"Search shortcuts..." -> "搜索快捷键..."');
+assert(translate('New Tab') === '新建标签页', '"New Tab" -> "新建标签页"');
+assert(translate('Reopen Closed Tab') === '重新打开关闭的标签页', '"Reopen Closed Tab" -> "重新打开关闭的标签页"');
+assert(translate('Move Conversation Up') === '上移会话', '"Move Conversation Up" -> "上移会话"');
+assert(translate('Move Conversation Down') === '下移会话', '"Move Conversation Down" -> "下移会话"');
+assert(translate('7 turns') === '7 个轮次', '"7 turns" -> "7 个轮次"');
+assert(translate('1 turn') === '1 个轮次', '"1 turn" -> "1 个轮次"');
+assert(translate('Turn 4') === '第 4 轮', '"Turn 4" -> "第 4 轮"');
+assert(translate('Turn 12') === '第 12 轮', '"Turn 12" -> "第 12 轮"');
+assert(translate('39 of 41') === '第 39 轮（共 41 轮）', '"39 of 41" -> "第 39 轮（共 41 轮）"');
+assert(translate('(2 image attachments)') === '(2 个图片附件)', '"(2 image attachments)" -> "(2 个图片附件)"');
+assert(translate('(1 image attachment)') === '(1 个图片附件)', '"(1 image attachment)" -> "(1 个图片附件)"');
+assert(translate('when working in this project.') === '在此项目中工作时。', '项目专属说明单独出现时的兜底汉化');
+
+// 14. 验证极端跨层级多节点汉化断言
+const multiLayerContainer = win.document.createElement('div');
+multiLayerContainer.innerHTML = '<div><span>包含</span></div><div><a href="#">全局权限</a></div><div>when working in these conversations. <a href="#">了解更多。</a></div>';
+win.document.body.appendChild(multiLayerContainer);
+win.__AGY_TRANSLATE_EL__(multiLayerContainer);
+assert(multiLayerContainer.textContent.includes('全局权限') && multiLayerContainer.textContent.includes('此类会话') && !multiLayerContainer.textContent.includes('when working in these conversations'), '极端跨层级多节点顺应宿主原版 DOM 汉化彻底消灭英文残留');
+
+// 15. 验证 2.28.2 历史会话下线、跨会话搜索与侧边栏归档引导气泡
+console.log('\n--- 4.17 验证 v2.28.2 跨会话搜索与侧边栏归档引导气泡汉化 ---');
+assert(translate('Search Across Conversations') === '跨会话搜索', '"Search Across Conversations" -> "跨会话搜索"');
+assert(translate('View archived in the sidebar (▾ menu).') === '可在侧边栏查看已归档会话（▾ 菜单）。', '侧边栏归档提示带三角符号汉化通过');
+assert(translate('View archived in the sidebar (▾ menu)') === '可在侧边栏查看已归档会话（▾ 菜单）', '侧边栏归档提示无句号汉化通过');
+assert(translate('View archived in the sidebar (▼ menu).') === '可在侧边栏查看已归档会话（▼ 菜单）。', '侧边栏归档提示带黑三角符号汉化通过');
+assert(translate('Archived conversations') === '已归档会话', '"Archived conversations" -> "已归档会话"');
+assert(translate('View archived') === '查看已归档', '"View archived" -> "查看已归档"');
+assert(translate('Show archived') === '显示已归档', '"Show archived" -> "显示已归档"');
+assert(translate('Hide archived') === '隐藏已归档', '"Hide archived" -> "隐藏已归档"');
+
+const popoverEl = win.document.createElement('div');
+popoverEl.innerHTML = '<h3>Search Across Conversations</h3>' +
+  '<div>Search conversations with <svg aria-label="search"></svg> in the top left.</div>' +
+  '<div>View archived in the sidebar (▾ menu).</div>' +
+  '<button>Close</button>';
+win.document.body.appendChild(popoverEl);
+win.__AGY_TRANSLATE_EL__(popoverEl);
+assert(popoverEl.querySelector('h3').textContent === '跨会话搜索', '引导气泡标题汉化通过');
+assert(popoverEl.querySelectorAll('div')[0].textContent.includes('可通过左上角') && popoverEl.querySelectorAll('div')[0].textContent.includes('图标搜索会话。'), '引导气泡搜索提示行汉化通过');
+assert(popoverEl.querySelectorAll('div')[1].textContent === '可在侧边栏查看已归档会话（▾ 菜单）。', '引导气泡侧边栏归档提示行汉化通过');
+assert(popoverEl.querySelector('button').textContent === '关闭', '引导气泡关闭按钮汉化通过');
+
+console.log('\n============================================================');
+console.log(`📊 测试完成: 共 ${passed + failed} 项断言, 通过 ${passed} 项, 失败 ${failed} 项`);
+console.log('============================================================\n');
+
+if (failed > 0) {
+  process.exit(1);
+} else {
+  process.exit(0);
+}

@@ -1,0 +1,59 @@
+{
+  "name": "antigravity-chinese",
+  "version": "3.3.50",
+  "description": "Antigravity 桌面与 VS Code 扩展中文本地化、备份还原与维护工具 (Community Chinese localization and lifecycle tools)",
+  "main": "cli.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "bin": {
+    "antigravity-cn": "./cli.js"
+  },
+  "scripts": {
+    "build:dict": "node tools/build-dict.js",
+    "audit": "node tools/ultimate-consistency-audit.js",
+    "test": "node test/test-lint.js && node test/verify.js && node test/test-screenshots.js && node test/test-cdp.js && node test/test-menu-and-titles.js && node test/test-asar-lifecycle.js && node test/test-detector-live.js && node test/test-proofread-integrity.js && node test/test-vscode-patch.js && node --test test/test-regressions.js && node --test test/test-user-content.js && node --test test/test-swarm.js && node --test test/test-runtime-performance.js && node tools/ultimate-consistency-audit.js",
+    "test:verify": "node test/verify.js",
+    "test:screenshots": "node test/test-screenshots.js",
+    "test:cdp": "node test/test-cdp.js",
+    "test:menus": "node test/test-menu-and-titles.js",
+    "test:asar": "node test/test-asar-lifecycle.js",
+    "test:detector": "node test/test-detector-live.js",
+    "test:proofread": "node test/test-proofread-integrity.js",
+    "test:vscode": "node test/test-vscode-patch.js",
+    "scan:drift": "node tools/drift-detector.js",
+    "status": "node cli.js status",
+    "status:vscode": "node cli.js status:vscode",
+    "install-patch": "node cli.js install",
+    "install:vscode": "node cli.js install:vscode",
+    "install:plugin": "node cli.js install-plugin",
+    "uninstall:plugin": "node cli.js uninstall-plugin",
+    "launch": "node cli.js launch",
+    "restore": "node cli.js restore",
+    "restore:vscode": "node cli.js restore:vscode",
+    "audit:ui": "node tools/ui-inventory.js"
+  },
+  "keywords": [
+    "chinese",
+    "zh-cn",
+    "i18n",
+    "localization",
+    "electron",
+    "windows",
+    "macos",
+    "linux",
+    "self-healing",
+    "electron-patch",
+    "antigravity",
+    "google-antigravity",
+    "antigravity-ide",
+    "gemini",
+    "ai-agent"
+  ],
+  "author": "Antigravity Open Source Community",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/asar": "3.2.14",
+    "jsdom": "^22.1.0"
+  }
+}

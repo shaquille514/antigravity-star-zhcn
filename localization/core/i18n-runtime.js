@@ -1,0 +1,975 @@
+/**
+ * Antigravity Chinese Localization Engine
+ * 桌面 preload 与 VS Code Webview 共用的翻译、缓存和 DOM 保护实现。
+ *
+ * 核心改进：
+ * 1. 彻底阻断 requestIdleCallback 自旋死循环，改为 15 秒低频保底扫描
+ * 2. 增加 DOM 否定标记，未命中节点二次扫描 O(1) 瞬时退出
+ * 3. 增加悬浮 Portal/Tooltip 门禁过滤与 100ms 节流阀，根绝 mouseover 树暴搜
+ * 4. 算法与死代码优化：英文字母快速短路、移除 Step 5 patterns 死代码、空格/长度门禁、双向 Map 缓存
+ */
+(function (root) {
+  'use strict';
+
+  if (!root) {
+    root = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this);
+  }
+  if (!root) return;
+
+  function createI18nEngine(dictData) {
+    var data = dictData || {};
+    var exactDict = data.exact || {};
+    var allPatterns = (data.patterns || []).concat(data.rules || []);
+    var patterns = allPatterns.map(function (p) {
+      return {
+        regex: new RegExp(p.regex),
+        replacement: p.replacement
+      };
+    });
+
+    var translatedValues = {};
+    for (var k in exactDict) {
+      if (exactDict.hasOwnProperty(k)) {
+        translatedValues[exactDict[k]] = true;
+      }
+    }
+
+    var translationCache = typeof Map !== 'undefined' ? new Map() : null;
+    var MAX_CACHE_SIZE = 10000;
+
+    function cacheAndReturn(key, value) {
+      if (translationCache) {
+        if (translationCache.size >= MAX_CACHE_SIZE) {
+          var iter = translationCache.keys();
+          for (var ci = 0; ci < 1000; ci++) {
+            var oldK = iter.next().value;
+            if (oldK !== undefined) {
+              translationCache.delete(oldK);
+            } else {
+              break;
+            }
+          }
+        }
+        translationCache.set(key, value);
+      }
+      return value;
+    }
+
+    function normalizeWhitespace(str) {
+      return str.replace(/\s+/g, ' ').trim();
+    }
+
+    var hasOwn = Object.prototype.hasOwnProperty;
+
+    function translateSingleUnit(rawStr) {
+      if (!rawStr || typeof rawStr !== 'string') return null;
+      var normalized = normalizeWhitespace(rawStr);
+      if (!normalized) return null;
+
+      if (translationCache && translationCache.has(normalized)) {
+        return translationCache.get(normalized);
+      }
+
+      if (hasOwn.call(exactDict, normalized)) {
+        return cacheAndReturn(normalized, exactDict[normalized]);
+      }
+
+      if (!/[a-zA-Z]/.test(normalized)) {
+        return cacheAndReturn(normalized, null);
+      }
+
+      if (hasOwn.call(translatedValues, normalized)) {
+        return cacheAndReturn(normalized, null);
+      }
+
+      if (/[\u4e00-\u9fa5]/.test(normalized) && !/[a-zA-Z]{2,}/.test(normalized)) {
+        return cacheAndReturn(normalized, null);
+      }
+
+      // Shortcut accessibility labels combine a configurable chord with a known UI action.
+      // Translate only dictionary-backed actions and templates; preserve the key symbols.
+      var shortcutLabel = normalized.match(/^(?:(Shortcut|Remove shortcut) (.+?) for|Add shortcut for) (.+)$/);
+      if (shortcutLabel && hasOwn.call(exactDict, shortcutLabel[3])) {
+        var shortcutTemplateKey = shortcutLabel[1]
+          ? shortcutLabel[1] + ' {shortcut} for {action}'
+          : 'Add shortcut for {action}';
+        if (hasOwn.call(exactDict, shortcutTemplateKey)) {
+          var shortcutText = exactDict[shortcutTemplateKey].replace(/\{(action|shortcut)\}/g, function (_, field) {
+            return field === 'action' ? exactDict[shortcutLabel[3]] : shortcutLabel[2];
+          });
+          return cacheAndReturn(normalized, shortcutText);
+        }
+      }
+
+      for (var i = 0; i < patterns.length; i++) {
+        var p = patterns[i];
+        if (p.regex.test(normalized)) {
+          var result = normalized.replace(p.regex, p.replacement);
+          for (var pi = 0; pi < patterns.length; pi++) {
+            if (patterns[pi].regex.test(result)) {
+              result = result.replace(patterns[pi].regex, patterns[pi].replacement);
+            }
+          }
+          p.regex.lastIndex = 0;
+          return cacheAndReturn(normalized, result);
+        }
+      }
+
+      var punctuationMatch = normalized.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
+      if (punctuationMatch) {
+        var base = punctuationMatch[1].trim();
+        var punc = punctuationMatch[2];
+        if (hasOwn.call(exactDict, base)) {
+          return cacheAndReturn(normalized, exactDict[base] + (punc === ':' ? '：' : punc));
+        }
+      }
+
+      var hotkeyMatch = normalized.match(/^([\w\s\-\/]+?)\s*(\((?:Ctrl|Cmd|Alt|Shift)\+[^\s\)]+\)|\b(?:Ctrl|Cmd|Alt|Shift)\+[\w;:,\\/+\-]+)$/i);
+      if (hotkeyMatch) {
+        var cmdBase = hotkeyMatch[1].trim();
+        var hotkey = hotkeyMatch[2].trim();
+        if (hasOwn.call(exactDict, cmdBase)) {
+          return cacheAndReturn(normalized, exactDict[cmdBase] + (hotkey.charAt(0) === '(' ? ' ' + hotkey : ' ' + hotkey));
+        }
+      }
+
+      if (normalized.indexOf('. ') !== -1 || normalized.indexOf('! ') !== -1 || normalized.indexOf('? ') !== -1 || normalized.indexOf('。') !== -1) {
+        var sentences = normalized.split(/([.!?]\s+|[。！？]\s*)/);
+        var anyTranslated = false;
+        var allTranslated = true;
+        var translatedParts = [];
+        for (var sIdx = 0; sIdx < sentences.length; sIdx++) {
+          var part = sentences[sIdx];
+          var trimmedPart = part.trim();
+          if (!trimmedPart || /^[.!?。！？\s]+$/.test(part)) {
+            translatedParts.push(part.replace(/\.\s*/g, '。 '));
+            continue;
+          }
+          var transPart = (hasOwn.call(exactDict, trimmedPart) ? exactDict[trimmedPart] : null) ||
+                          (hasOwn.call(exactDict, trimmedPart + '.') ? exactDict[trimmedPart + '.'] : null);
+          if (!transPart) {
+            for (var pIdx = 0; pIdx < patterns.length; pIdx++) {
+              if (patterns[pIdx].regex.test(trimmedPart)) {
+                transPart = trimmedPart.replace(patterns[pIdx].regex, patterns[pIdx].replacement);
+                for (var pi2 = 0; pi2 < patterns.length; pi2++) {
+                  if (patterns[pi2].regex.test(transPart)) {
+                    transPart = transPart.replace(patterns[pi2].regex, patterns[pi2].replacement);
+                  }
+                }
+                break;
+              }
+            }
+          }
+          if (!transPart) {
+            var pMatch = trimmedPart.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
+            if (pMatch && hasOwn.call(exactDict, pMatch[1].trim())) {
+              transPart = exactDict[pMatch[1].trim()] + (pMatch[2] === ':' ? '：' : pMatch[2]);
+            }
+          }
+          if (transPart) {
+            anyTranslated = true;
+            translatedParts.push(transPart);
+          } else {
+            allTranslated = false;
+            translatedParts.push(part);
+          }
+        }
+        if (anyTranslated && allTranslated) {
+          return cacheAndReturn(normalized, translatedParts.join('').replace(/([。！？])[。！？.]*\s*/g, '$1 ').trim());
+        }
+      }
+
+      return cacheAndReturn(normalized, null);
+    }
+
+    return {
+      translate: translateSingleUnit,
+      exactDict: exactDict,
+      patterns: patterns,
+      cache: translationCache,
+      normalizeWhitespace: normalizeWhitespace
+    };
+  }
+
+  // 若处于 Node.js 环境，优先准备导出
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      createI18nEngine: createI18nEngine
+    };
+  }
+
+  if (root && root.__AGY_I18N_INITIALIZED__) return;
+  if (root) root.__AGY_I18N_INITIALIZED__ = true;
+
+  var doc = root ? (root.document || (typeof document !== 'undefined' ? document : null)) : null;
+
+  var I18N_DATA = (root && root.__AGY_I18N_DATA__) || { exact: {}, patterns: [] };
+  var defaultEngine = createI18nEngine(I18N_DATA);
+  var exactDict = defaultEngine.exactDict;
+  var patterns = defaultEngine.patterns;
+  var translationCache = defaultEngine.cache;
+  var normalizeWhitespace = defaultEngine.normalizeWhitespace;
+  var translateSingleUnit = defaultEngine.translate;
+
+  var IGNORED_TAGS = {
+    'SCRIPT': 1, 'STYLE': 1, 'CODE': 1, 'PRE': 1, 'NOSCRIPT': 1,
+    'SVG': 1, 'PATH': 1, 'CANVAS': 1,
+    'IFRAME': 1, 'VIDEO': 1, 'AUDIO': 1
+  };
+
+  var IGNORED_CLASSES = [
+    'monaco-editor',
+    'view-lines',
+    'view-line',
+    'monaco-mouse-cursor-text',
+    'xterm',
+    'terminal',
+    'token',
+    'hljs',
+    'code-block',
+    'editor-instance'
+  ];
+
+  var TRANSLATABLE_ATTRS = ['title', 'placeholder', 'aria-label', 'data-tooltip', 'alt', 'aria-description'];
+
+  // These labels contain user-authored text or identifiers, even when their text
+  // happens to be an exact dictionary entry such as "Settings".
+  var CONTENT_TEST_IDS = {
+    'user-input-step': 1,
+    'user-message-content': 1,
+    'planner-response-text': 1,
+    'breadcrumb-segment': 1,
+    'live-user-turn': 1,
+    'live-agent-turn': 1,
+    'transcript-line-text': 1,
+    'voice-transcript-summary-lead': 1,
+    'voice-transcript-summary-point': 1,
+    'webview-device-chooser-option': 1,
+    'plugin-detail-footer-author': 1,
+    'plugin-detail-footer-version': 1,
+    'plugin-hook-list': 1,
+    'plugin-suggested-prompt-row': 1
+  };
+  var CONTENT_CLASSES = {
+    'prose': 1,
+    'markdown': 1,
+    'markdown-body': 1,
+    'markdown-content': 1
+  };
+
+  function isModelSelectorBoundary(elem) {
+    if (!elem || elem.nodeType !== 1) return false;
+    var testId = elem.getAttribute ? elem.getAttribute('data-testid') : null;
+    if (testId) {
+      if (testId === 'model-selector-trigger' ||
+          testId === 'model-selector-item' ||
+          testId === 'model-selector-effort-option' ||
+          testId === 'model-selector-effort-group' ||
+          testId === 'model-selector-list') {
+        return true;
+      }
+    }
+    if (elem.hasAttribute && elem.hasAttribute('data-effort')) {
+      return true;
+    }
+    return false;
+  }
+
+  function isCustomizationContent(el) {
+    // App 2.31.2 uses the same workspace view for project and unassigned settings.
+    // These leaves carry author metadata; their neighboring actions and headings
+    // are ordinary UI. Test classes before looking up their scoped container.
+    if (el.matches('span.font-medium.truncate[data-tooltip-id], div.text-sm.text-muted-foreground.line-clamp-2.mt-1, span.text-purple-400, span.text-green-400') &&
+        el.closest('[data-testid="workspace-customizations-view"]')) return true;
+    if (el.matches('div.font-medium.text-foreground.truncate, div.text-sm.text-muted-foreground.truncate, img') &&
+        el.closest('[data-testid="customization-card"][data-card-name]')) return true;
+    if (el.matches('h1.text-xl.font-medium.truncate, p.text-muted-foreground.leading-relaxed, span.font-medium.flex-shrink-0, span.text-muted-foreground.truncate[title]')) {
+      var detail = el.closest('[data-testid="plugin-detail"], [role="dialog"]');
+      if (detail && (detail.getAttribute('data-testid') === 'plugin-detail' ||
+          detail.querySelector('h1.text-xl.font-medium.truncate, [data-testid="doc-row-modal"]'))) return true;
+    }
+    if (el.matches('h1, h2, p.text-muted-foreground.leading-relaxed, div.font-mono.break-all > span')) {
+      var dialog = el.closest('[role="dialog"]');
+      if (dialog && dialog.querySelector('[data-testid="doc-row-modal"]')) return true;
+    }
+    return false;
+  }
+
+  function isMcpServerContent(el) {
+    // App 2.32.1 renders identifiers and raw startup diagnostics beside controls.
+    // Keep those source values intact without suppressing Restart/status labels.
+    var content = el.matches('span.font-medium.shrink-0[title], div.text-sm.text-red-500.break-words, button[aria-pressed]') ||
+      (el.tagName === 'SPAN' && el.classList.contains('rounded-full') &&
+        el.classList.contains('shrink-0') && el.classList.contains('text-[11px]'));
+    return content && !!el.closest('[data-testid="mcp-server-row"]');
+  }
+
+  function isProtectedBoundary(el) {
+    if (IGNORED_TAGS[el.tagName]) return true;
+    if (el.id === 'agy-dream-wallpaper-v2' || el.id === 'agy-dream-style-v2' ||
+        el.id === 'hagemi-pet-host' ||
+        (el.hasAttribute && el.hasAttribute('data-agy-dream-layer'))) return true;
+    if (el.isContentEditable || el.getAttribute('contenteditable') === '' ||
+        el.getAttribute('contenteditable') === 'true' || el.getAttribute('contenteditable') === 'plaintext-only') return true;
+    if (isModelSelectorBoundary(el)) return true;
+
+    var testId = el.getAttribute('data-testid');
+    if ((CONTENT_TEST_IDS[testId] === 1 && !isCustomizationBreadcrumb(el)) || el.hasAttribute('data-ag-localization-skip') ||
+        el.hasAttribute('data-markdown-root')) return true;
+    if (el.hasAttribute('data-uri') && el.hasAttribute('data-quotable-inline')) return true;
+    if (testId === 'project-header' && el.hasAttribute('data-project-label')) return true;
+    if (el.tagName === 'DD' && el.parentElement &&
+        el.parentElement.getAttribute('data-testid') === 'permission-download-details') return true;
+    if (testId && testId.indexOf('gcp-project-combobox-option-') === 0 &&
+        el.hasAttribute('data-project-id')) return true;
+    if (el.tagName === 'NAV' && el.getAttribute('aria-label') === 'File path breadcrumbs') return true;
+
+    var className = typeof el.className === 'string' ? el.className : '';
+    if (className) {
+      for (var i = 0; i < IGNORED_CLASSES.length; i++) {
+        if (className.indexOf(IGNORED_CLASSES[i]) !== -1) return true;
+      }
+      var classes = className.split(/\s+/);
+      for (var ci = 0; ci < classes.length; ci++) {
+        if (CONTENT_CLASSES[classes[ci]] === 1) return true;
+      }
+    }
+    return isCustomizationContent(el) || isMcpServerContent(el);
+  }
+
+  function isCustomizationBreadcrumb(el) {
+    // The first segment on the dedicated customization route is navigation UI.
+    // Plugin/project names, later segments and the same name on other routes stay protected.
+    if (el.getAttribute('data-testid') !== 'breadcrumb-segment' ||
+        !/^\/customizations(?:\/|$)/.test(doc.location.pathname) ||
+        !/^(Customizations|自定义扩展)$/.test(el.textContent.trim())) return false;
+    var group = el.parentElement && el.parentElement.parentElement;
+    return !!group && group.querySelector('[data-testid="breadcrumb-segment"]') === el;
+  }
+
+  function getMixedContentKind(el) {
+    var testId = el.getAttribute('data-testid');
+    if (testId === 'agent-message' || testId === 'agent-response') return 'message';
+    if (testId === 'conversation-row-sidebar') return 'conversation';
+    if (testId === 'side-question-question' || testId === 'side-question-answer') return 'side-question';
+    var role = el.getAttribute('role');
+    if (role === 'tree' || role === 'treeitem') return 'tree';
+    return null;
+  }
+
+  function isMessageUiControl(el) {
+    var role = el.getAttribute('role');
+    return el.tagName === 'BUTTON' || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+      role === 'button' || role === 'status' || el.getAttribute('data-testid') === 'plan-command-fyi-alert' ||
+      isSideQuestionUi(el) || isTimestampUi(el);
+  }
+
+  function isSideQuestionUi(el) {
+    return el.matches('[data-testid="side-question-question"] > span.shrink-0, [data-testid="side-question-answer"] > span.opacity-70.animate-pulse');
+  }
+
+  function isTimestampUi(el) {
+    if (!el || el.nodeType !== 1 || el.tagName !== 'SPAN' || !el.hasAttribute('data-screenshot-volatile')) return false;
+    return (el.hasAttribute('data-tooltip-id') && el.classList.contains('whitespace-nowrap')) ||
+      (el.classList.contains('tabular-nums') && !!el.closest('[data-testid="conversation-row-sidebar"]'));
+  }
+
+  function translateUiText(text, el) {
+    // Compact relative times belong to UI clocks, never arbitrary message text.
+    if (isTimestampUi(el)) {
+      var clock = text.match(/^(?:(about|over|almost|less than) )?(\d+)(mo|m|h|d|w|y)( ago)?$/);
+      if (clock) return ({about: '约 ', over: '超过 ', almost: '将近 ', 'less than': '不到 '}[clock[1]] || '') +
+        clock[2] + ({mo: '个月', m: '分钟', h: '小时', d: '天', w: '周', y: '年'}[clock[3]]) + (clock[4] ? '前' : '');
+      if (text === 'now' || text === 'just now') return '刚刚';
+    }
+    return translateSingleUnit(text);
+  }
+
+  // Cache DOM facts only during one synchronous scan slice. Never retain a
+  // content verdict across renderer writes, reparenting, routes or later frames.
+  var scanContext = null;
+  function withScanContext(callback) {
+    var previous = scanContext;
+    scanContext = { facts: new WeakMap(), modes: new WeakMap() };
+    try { return callback(); }
+    finally { scanContext = previous; }
+  }
+
+  function getElementFacts(el) {
+    var facts = scanContext && scanContext.facts.get(el);
+    if (!facts) {
+      facts = { protected: isProtectedBoundary(el), kind: getMixedContentKind(el) };
+      if (scanContext) scanContext.facts.set(el, facts);
+    }
+    return facts;
+  }
+
+  // 0: protect the entire subtree; 1: traverse mixed content, preserving its own
+  // text/attributes; 2: translate UI. Recompute ancestry for every entry point:
+  // observer updates may start deep in a subtree, and React may reparent nodes.
+  function getElementTranslationMode(el) {
+    if (!el || el.nodeType !== 1) return 2;
+    if (scanContext && scanContext.modes.has(el)) return scanContext.modes.get(el);
+    var current = el;
+    var control = null;
+    var inToolbar = false;
+    var inLink = false;
+    var preserveContent = false;
+    while (current) {
+      var facts = getElementFacts(current);
+      if (facts.protected || (scanContext && scanContext.modes.get(current) === 0)) {
+        if (scanContext) scanContext.modes.set(el, 0);
+        return 0;
+      }
+      var kind = facts.kind;
+      if (kind) {
+        // A sidebar navigation link carries the conversation name, even inside wrappers.
+        if (kind === 'conversation' && inLink) return 0;
+        if (!control) {
+          preserveContent = true;
+        } else if (kind === 'side-question' && !isSideQuestionUi(control)) {
+          preserveContent = true;
+        } else if (kind === 'message' && !inToolbar && control.parentElement !== current &&
+            control.getAttribute('data-testid') !== 'plan-command-fyi-alert' && !isTimestampUi(control)) {
+          // Unmarked legacy bodies can contain buttons. A nested button alone is not UI chrome.
+          preserveContent = true;
+        } else if (kind === 'tree' && (control.hasAttribute('data-uri') ||
+            (control.tagName !== 'BUTTON' && !inToolbar))) {
+          preserveContent = true;
+        }
+      } else if (!preserveContent) {
+        if (!control) {
+          if (facts.control === undefined) facts.control = isMessageUiControl(current);
+          if (facts.control) control = current;
+        }
+        if (control && current.getAttribute('role') === 'toolbar') inToolbar = true;
+        if (current.tagName === 'A') inLink = true;
+      }
+      current = current.parentElement;
+    }
+    var mode = preserveContent ? 1 : 2;
+    if (scanContext) scanContext.modes.set(el, mode);
+    return mode;
+  }
+
+
+
+  // 标记属性名，用于避免重复翻译
+  var MARK_ATTR = '_agyDone';
+  var textEdits = new WeakMap();
+  var attributeEdits = new WeakMap();
+
+  // Retain the source of a DOM write while this runtime still owns the displayed value.
+  function writeLocalizedText(node, value) {
+    if (node.nodeValue !== value) {
+      var previous = textEdits.get(node);
+      var source = previous && previous.localized === node.nodeValue ? previous.source : node.nodeValue;
+      textEdits.set(node, { source: source, localized: value });
+      node.nodeValue = value;
+    }
+    node._agyOriginal = value;
+  }
+
+  function restoreLocalizedText(node) {
+    var edit = textEdits.get(node);
+    if (!edit) return;
+    textEdits.delete(node);
+    if (node.nodeValue === edit.localized) node.nodeValue = edit.source;
+    node._agyOriginal = undefined;
+  }
+
+  function restoreLocalizedAttributes(el) {
+    var edits = attributeEdits.get(el);
+    if (!edits) return;
+    attributeEdits.delete(el);
+    Object.keys(edits).forEach(function (attr) {
+      var edit = edits[attr];
+      if (el.getAttribute(attr) === edit.localized) el.setAttribute(attr, edit.source);
+      el[MARK_ATTR + '_' + attr] = undefined;
+    });
+  }
+
+  function restoreProtectedSubtree(el) {
+    restoreLocalizedAttributes(el);
+    var walker = doc.createTreeWalker(el, root.NodeFilter.SHOW_ELEMENT | root.NodeFilter.SHOW_TEXT);
+    var node = walker.nextNode();
+    while (node) {
+      if (node.nodeType === 3) restoreLocalizedText(node);
+      else restoreLocalizedAttributes(node);
+      node = walker.nextNode();
+    }
+  }
+
+  // 扫描轮次 ID，同一轮全量扫描中元素只处理一次
+  var currentScanId = 0;
+
+  function translateTextNode(node, parentMode) {
+    if (!node || node.nodeType !== 3) return;
+    var parent = node.parentElement || node.parentNode;
+    if (parent && ((parentMode === undefined ? getElementTranslationMode(parent) : parentMode) !== 2 || parent.tagName === 'INPUT' || parent.tagName === 'TEXTAREA')) {
+      restoreLocalizedText(node);
+      return;
+    }
+
+    var original = node.nodeValue;
+    if (!original) return;
+
+    // 如果节点已标记原始文本且未变化，直接 O(1) 瞬时退出
+    if (node._agyOriginal === original) return;
+
+    var trimmed = original.trim();
+    if (!trimmed) {
+      // 对纯空白节点补充否定标记，二次扫描直接 O(1) 退出，避免重复调用 trim()
+      node._agyOriginal = original;
+      return;
+    }
+
+    if (trimmed === '.' && node.previousSibling && /[\u4e00-\u9fa5]/.test(node.previousSibling.textContent || '')) {
+      writeLocalizedText(node, original.replace('.', '。'));
+      return;
+    }
+
+    var translated = translateUiText(trimmed, parent);
+    if (translated !== null && translated !== trimmed) {
+      var leadingSpace = original.match(/^\s*/)[0];
+      var trailingSpace = original.match(/\s*$/)[0];
+      // 盘古之白排版优化：若前一个兄弟节点以英数结尾且当前译文以汉字开头，自动补齐规范空格
+      if (!leadingSpace && node.previousSibling) {
+        var prevText = (node.previousSibling.textContent || '').trim();
+        if (/[a-zA-Z0-9]$/.test(prevText) && /^[\u4e00-\u9fa5]/.test(translated)) {
+          leadingSpace = ' ';
+        }
+      }
+      writeLocalizedText(node, leadingSpace + translated + trailingSpace);
+    } else {
+      // 关键性能优化：补充 DOM 否定标记，未命中时记录原始文本，二次扫描直接 O(1) 退出
+      node._agyOriginal = original;
+    }
+  }
+
+  // 深度穿透获取首个纯文本子节点（单例通用穿透辅助，避免在热路径循环中重复创建闭包分配）
+  function getFirstDirectTextNode(n) {
+    var cur = n;
+    while (cur) {
+      if (cur.nodeType === 3) return cur;
+      if (cur.nodeType === 1 && cur.childNodes.length === 1) {
+        cur = cur.firstChild;
+      } else {
+        break;
+      }
+    }
+    return null;
+  }
+
+
+
+  function translateElement(el, scanId, work) {
+    if (!el || el.nodeType !== 1) return;
+    if (scanId && el._agyScanId === scanId) return;
+    var translationMode = getElementTranslationMode(el);
+    if (translationMode === 0) {
+      if (work) {
+        restoreLocalizedAttributes(el);
+        appendChildren(el, work);
+      } else restoreProtectedSubtree(el);
+      return;
+    }
+    var translateOwnContent = translationMode === 2;
+    if (!translateOwnContent) restoreLocalizedAttributes(el);
+
+    // 同一轮扫描中，已处理的元素跳过
+    if (scanId) el._agyScanId = scanId;
+
+    // 复合组件自愈：处理特定 JSX 碎片化 Alert（如 plan-command-fyi-alert）
+    if (translateOwnContent && el.getAttribute && el.getAttribute('data-testid') === 'plan-command-fyi-alert') {
+      var alertSpan = el.querySelector ? el.querySelector('span') : null;
+      if (alertSpan && getElementTranslationMode(alertSpan) === 2) {
+        var alertChild = alertSpan.firstChild;
+        while (alertChild) {
+          if (alertChild.nodeType === 3 && alertChild.nodeValue && alertChild.nodeValue.trim() === 'Type') {
+            writeLocalizedText(alertChild, alertChild.nodeValue.replace('Type', '输入'));
+          }
+          alertChild = alertChild.nextSibling;
+        }
+      }
+    }
+
+    // 翻译属性
+    for (var i = 0; translateOwnContent && i < TRANSLATABLE_ATTRS.length; i++) {
+      var attr = TRANSLATABLE_ATTRS[i];
+      if (el.hasAttribute && el.hasAttribute(attr)) {
+        var val = el.getAttribute(attr);
+        if (val) {
+          // 检查是否已翻译过此属性
+          var markKey = MARK_ATTR + '_' + attr;
+          if (el[markKey] === val) continue;
+
+          var trans = translateSingleUnit(val);
+          if (trans !== null && trans !== val) {
+            var edits = attributeEdits.get(el);
+            if (!edits) {
+              edits = Object.create(null);
+              attributeEdits.set(el, edits);
+            }
+            edits[attr] = { source: val, localized: trans };
+            el.setAttribute(attr, trans);
+            el[markKey] = trans; // 标记已翻译的值
+          } else {
+            // 关键性能优化：补充 DOM 否定标记，未命中时记录原属性值，二次扫描直接 O(1) 退出
+            el[markKey] = val;
+          }
+        }
+      }
+    }
+
+    // 遍历子节点
+    // 联合文本自愈：如果元素直接子节点全为纯文本节点且数量 > 1（常见于 React 碎片化模板拆分，如 "All ", e, "s run as Flash."）
+    var first = el.firstChild;
+    if (translateOwnContent && first && first.nextSibling) {
+      var allText = true;
+      var cur = first;
+      while (cur) {
+        if (cur.nodeType !== 3) {
+          allText = false;
+          break;
+        }
+        cur = cur.nextSibling;
+      }
+      if (allText) {
+        var combinedText = el.textContent;
+        if (combinedText) {
+          var combinedTrans = translateUiText(combinedText, el);
+          if (combinedTrans !== null && combinedTrans !== combinedText) {
+            writeLocalizedText(first, combinedTrans);
+            var other = first.nextSibling;
+            while (other) {
+              writeLocalizedText(other, '');
+              other = other.nextSibling;
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    if (work) {
+      appendChildren(el, work);
+      return;
+    }
+    var child = el.firstChild;
+    while (child) {
+      if (child.nodeType === 3) {
+        translateTextNode(child, translationMode);
+      } else if (child.nodeType === 1) {
+        translateElement(child, scanId);
+      }
+      child = child.nextSibling;
+    }
+  }
+
+  function appendChildren(el, work) {
+    for (var child = el.lastChild; child; child = child.previousSibling) work.push(child);
+  }
+
+  // ============ Observer 与扫描调度 ============
+
+  var observer = null;
+  var observing = false;
+
+  function disconnectObserver() {
+    if (observer && observing) {
+      // Preserve renderer writes queued before a synchronous scan disconnects the observer.
+      recordMutations(observer.takeRecords());
+      observer.disconnect();
+      observing = false;
+    }
+  }
+
+  function reconnectObserver() {
+    if (observer && !observing && doc && doc.documentElement) {
+      observer.observe(doc.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: TRANSLATABLE_ATTRS
+      });
+      observing = true;
+    }
+  }
+
+  /**
+   * 安全地翻译一组节点
+   * 在翻译期间暂停 Observer，完成后重新连接
+   */
+  function safeTranslateNodes(nodes) {
+    disconnectObserver();
+    try {
+      withScanContext(function () {
+        for (var i = 0; i < nodes.length; i++) {
+          var node = nodes[i];
+          if (node.nodeType === 1) {
+            translateElement(node);
+          } else if (node.nodeType === 3) {
+            translateTextNode(node);
+          }
+        }
+      });
+    } catch (e) {
+      // 静默吞错，避免一个异常阻断整体
+    }
+    reconnectObserver();
+  }
+
+  /**
+   * 安全地执行全量扫描
+   */
+  function safeFullScan() {
+    if (!doc || !doc.documentElement) return;
+    currentScanId++;
+    disconnectObserver();
+    try {
+      withScanContext(function () { translateElement(doc.documentElement, currentScanId); });
+    } catch (e) {}
+    reconnectObserver();
+  }
+
+  // ---- 节流与去重：合并高频 mutation 到下一个 rAF ----
+  var pendingNodes = [];
+  var observedDocumentPath = doc && doc.location ? doc.location.pathname : '';
+  var pendingNodeSet = typeof Set !== 'undefined' ? new Set() : null;
+  var scanJobs = [];
+  var rafScheduled = false;
+
+  function enqueueNode(node) {
+    if (!node || (node.nodeType !== 1 && node.nodeType !== 3)) return;
+    if (pendingNodeSet) {
+      if (pendingNodeSet.has(node) || pendingNodeSet.has(doc.documentElement)) return;
+    }
+    if (pendingNodes.length >= 500) {
+      // Coalesce an exceptional burst into a bounded, time-sliced document scan.
+      // Never silently drop the tail and wait 15 seconds for translation.
+      pendingNodes = [doc.documentElement];
+      if (pendingNodeSet) { pendingNodeSet.clear(); pendingNodeSet.add(doc.documentElement); }
+    } else {
+      pendingNodes.push(node);
+      if (pendingNodeSet) pendingNodeSet.add(node);
+    }
+  }
+
+  function flushPendingNodes() {
+    rafScheduled = false;
+    if (!pendingNodes.length && !scanJobs.length) return;
+    disconnectObserver();
+    try {
+      if (!scanJobs.length) {
+        for (var i = pendingNodes.length - 1; i >= 0; i--) {
+          var node = pendingNodes[i];
+          if (!node.isConnected) continue;
+          var ancestor = node.parentElement;
+          while (ancestor && !(pendingNodeSet && pendingNodeSet.has(ancestor))) ancestor = ancestor.parentElement;
+          if (!ancestor) scanJobs.push(node);
+        }
+        pendingNodes = [];
+        if (pendingNodeSet) pendingNodeSet.clear();
+      }
+      withScanContext(function () {
+        var clock = root.performance && root.performance.now ? function () { return root.performance.now(); } : Date.now;
+        var deadline = clock() + 6;
+        var processed = 0;
+        // Count DOM nodes, not roots: a single remounted dialog can contain
+        // thousands of descendants. Yield even when it is the only queue item.
+        while (scanJobs.length && processed < 200 && (!processed || clock() < deadline)) {
+          var next = scanJobs.pop();
+          if (!next.isConnected) continue;
+          try {
+            if (next.nodeType === 1) translateElement(next, undefined, scanJobs);
+            else if (next.nodeType === 3) translateTextNode(next);
+          } catch (e) { /* A transient bad node must not discard the remaining queue. */ }
+          processed++;
+        }
+      });
+    } finally { reconnectObserver(); }
+    if (pendingNodes.length || scanJobs.length) scheduleFlush();
+  }
+
+  function scheduleFlush() {
+    if (!rafScheduled) {
+      rafScheduled = true;
+      if (root.requestAnimationFrame) {
+        root.requestAnimationFrame(flushPendingNodes);
+      } else {
+        setTimeout(flushPendingNodes, 16);
+      }
+    }
+  }
+
+  function recordMutations(mutations) {
+    // A SPA route can reuse an unchanged breadcrumb node with a different role.
+    if (doc.location.pathname !== observedDocumentPath) {
+      observedDocumentPath = doc.location.pathname;
+      var breadcrumbs = doc.querySelectorAll('[data-testid="breadcrumb-segment"]');
+      for (var bi = 0; bi < breadcrumbs.length; bi++) enqueueNode(breadcrumbs[bi]);
+    }
+    for (var i = 0; i < mutations.length; i++) {
+      var mutation = mutations[i];
+      if (mutation.type === 'childList') {
+        var added = mutation.addedNodes;
+        for (var j = 0; j < added.length; j++) enqueueNode(added[j]);
+      } else if (mutation.type === 'characterData') {
+        // Writes made while observing belong to the renderer, even when the value is unchanged.
+        textEdits.delete(mutation.target);
+        mutation.target._agyOriginal = undefined;
+        enqueueNode(mutation.target);
+      } else if (mutation.type === 'attributes') {
+        var edits = attributeEdits.get(mutation.target);
+        if (edits) delete edits[mutation.attributeName];
+        mutation.target[MARK_ATTR + '_' + mutation.attributeName] = undefined;
+        enqueueNode(mutation.target);
+      }
+    }
+    if (pendingNodes.length > 0) scheduleFlush();
+  }
+
+  function startObserver() {
+    if (!doc || !doc.documentElement) return;
+
+    // 首次全量扫描
+    safeFullScan();
+
+    var MutationObserverClass = root.MutationObserver || (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
+    if (MutationObserverClass) {
+      observer = new MutationObserverClass(recordMutations);
+
+      reconnectObserver();
+    }
+
+    // 低频保底扫描：彻底阻断 50~60Hz 无限自旋死循环，改为每 15 秒配合 requestIdleCallback 执行一次低频保底扫描
+    var idleScanScheduled = false;
+    function scheduleIdleScan() {
+      if (idleScanScheduled) return;
+      if (root.requestIdleCallback) {
+        idleScanScheduled = true;
+        root.requestIdleCallback(function () {
+          idleScanScheduled = false;
+          enqueueNode(doc.documentElement);
+          scheduleFlush();
+        }, { timeout: 5000 });
+      } else {
+        enqueueNode(doc.documentElement);
+        scheduleFlush();
+      }
+    }
+    setInterval(scheduleIdleScan, 15000);
+  }
+
+  function isFloatingElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (doc && (el === doc.body || el === doc.documentElement)) return false;
+    if (el.id === 'workbench') return false;
+    var cls = typeof el.className === 'string' ? el.className : '';
+    if (cls && cls.indexOf('monaco-workbench') !== -1) return false;
+
+    if (el.matches) {
+      try {
+        if (el.matches('[role="tooltip"], [role="menu"], [role="dialog"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover')) {
+          return true;
+        }
+      } catch (e) {}
+    }
+    var role = el.getAttribute ? el.getAttribute('role') : '';
+    if (role === 'tooltip' || role === 'menu' || role === 'dialog') return true;
+    if (el.hasAttribute && (el.hasAttribute('data-floating-ui-portal') || el.hasAttribute('data-radix-popper-content-wrapper'))) return true;
+    if (cls) {
+      if (cls.indexOf('popover') !== -1 || cls.indexOf('tooltip') !== -1 || cls.indexOf('context-view') !== -1 || cls.indexOf('monaco-hover') !== -1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isWorkbenchOrRoot(el) {
+    if (!el || el.nodeType !== 1) return true;
+    if (doc && (el === doc.body || el === doc.documentElement)) return true;
+    if (el.id === 'workbench') return true;
+    var cls = typeof el.className === 'string' ? el.className : '';
+    if (cls && cls.indexOf('monaco-workbench') !== -1) return true;
+    return false;
+  }
+
+  if (doc) {
+    if (doc.readyState === 'loading') {
+      doc.addEventListener('DOMContentLoaded', startObserver);
+    } else {
+      startObserver();
+    }
+
+    // 全局悬浮气泡 (Hover Tooltips / Popovers) 快速反应拦截器
+    // 专门防御光标移入时才动态挂载或改变属性的临时注释节点
+    try {
+      var lastHoverTime = 0;
+      var hoverScanTimer = null;
+
+      function scanFloatingContainers() {
+        if (!doc || !doc.body) return;
+        try {
+          // 定向扫描顶层 Portal 容器、Tooltip、Popover 节点，门禁拦截非浮层元素，绝不遍历整棵 DOM 树
+          var last = doc.body.lastElementChild;
+          if (last && isFloatingElement(last)) {
+            enqueueNode(last);
+          }
+          if (last && last.previousElementSibling && isFloatingElement(last.previousElementSibling)) {
+            enqueueNode(last.previousElementSibling);
+          }
+          var tooltips = doc.querySelectorAll ? doc.querySelectorAll('[role="tooltip"], [role="menu"], [role="dialog"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover') : null;
+          if (tooltips && tooltips.length > 0) {
+            for (var tIdx = 0; tIdx < tooltips.length; tIdx++) {
+              enqueueNode(tooltips[tIdx]);
+            }
+          }
+        } catch (e) {}
+        scheduleFlush();
+      }
+
+      var onHoverAction = function (e) {
+        // 120ms 节流阀：阻断高频事件风暴，杜绝掉帧卡顿
+        var now = Date.now ? Date.now() : (+new Date());
+        if (now - lastHoverTime < 120) return;
+        lastHoverTime = now;
+
+        var target = e.target;
+        if (!target) return;
+        try {
+          if (target.nodeType === 1) {
+            enqueueNode(target);
+            // 严禁对 #workbench / body 根容器递归全树深搜，防止剧烈掉帧
+            if (target.parentElement && !isWorkbenchOrRoot(target.parentElement)) {
+              enqueueNode(target.parentElement);
+            }
+          }
+        } catch (e) {}
+        scheduleFlush();
+
+        // 防抖延迟定向扫描浮动提示层（捕获动态延迟 50ms 挂载的气泡）
+        if (hoverScanTimer) clearTimeout(hoverScanTimer);
+        hoverScanTimer = setTimeout(function () {
+          hoverScanTimer = null;
+          scanFloatingContainers();
+        }, 50);
+      };
+
+      doc.addEventListener('pointerenter', onHoverAction, { capture: true, passive: true });
+      doc.addEventListener('contextmenu', onHoverAction, { capture: true, passive: true });
+    } catch (e) {}
+  }
+
+  if (root) {
+    root.__AGY_CREATE_ENGINE__ = createI18nEngine;
+    root.__AGY_TRANSLATE_UNIT__ = translateSingleUnit;
+    root.__AGY_TRANSLATE_EL__ = function (el) { safeTranslateNodes([el]); };
+    root.__AGY_RUN_FULL_SCAN__ = safeFullScan;
+    root.__AGY_CACHE__ = translationCache;
+    root.__AGY_IS_FLOATING__ = isFloatingElement;
+  }
+})(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
+

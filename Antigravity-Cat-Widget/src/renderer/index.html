@@ -1,0 +1,28 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'"><title>喵言喵语</title><link rel="stylesheet" href="../../assets/motions/gemini-widget.css"><link rel="stylesheet" href="widget.css"></head>
+<body><main id="widget"><div class="agy-art" id="mascot" data-state="idle"><section class="agy-bubble interactive" id="bubble" role="status" aria-live="polite">
+<div class="agy-bubble__title"><span id="title">Gemini Models</span><button id="close" aria-label="收起气泡">×</button></div>
+<div id="quota" class="agy-quota"><div class="quota-label"><span>5 小时</span><strong id="percent">—</strong></div><div class="agy-quota__track" id="track" role="progressbar" aria-label="Gemini Models 五小时剩余额度" aria-valuemin="0" aria-valuemax="100"><span class="agy-quota__fill" id="fill"></span></div><div class="quota-label"><span>1 周</span><strong id="percent-week">—</strong></div><div class="agy-quota__track" id="track-week" role="progressbar" aria-label="Gemini Models 一周剩余额度" aria-valuemin="0" aria-valuemax="100"><span class="agy-quota__fill" id="fill-week"></span></div><div id="caption" class="agy-quota__caption"></div></div>
+<div id="value" class="agy-bubble__value" hidden></div><div id="detail" hidden></div>
+<div id="chat-panel" class="agy-chat" hidden>
+  <div id="chat-log" class="agy-chat__log"><p class="agy-chat__empty">双击右键可随时呼出输入框，问本喵任何问题~</p></div>
+  <div id="chat-missing-key" class="agy-chat__setup" hidden><span>还没填 Gemini API Key 呢~</span><button id="chat-open-settings" type="button">去设置填写</button></div>
+  <form id="chat-form" class="agy-chat__form">
+    <textarea id="chat-input" class="agy-chat__input" rows="2" placeholder="输入问题… Enter 发送 / Shift+Enter 换行 / Esc 收起"></textarea>
+    <div class="agy-chat__actions">
+      <button id="chat-reset" type="button" title="开启新对话上下文">新对话</button>
+      <button id="chat-stop" type="button" hidden>停止</button>
+      <button id="chat-send" type="submit">发送</button>
+    </div>
+  </form>
+</div>
+<div class="agy-bubble__meta" id="meta">本机只读 · 不估算账户余额</div>
+<nav class="bubble-nav"><button id="prev" aria-label="上一页">‹</button><span id="page">1 / 5</span><button id="next" aria-label="下一页">›</button></nav></section>
+<div class="widget-tools interactive"><button id="toggle" aria-label="显示气泡">•••</button><button id="chat-trigger" aria-label="Gemini 对话 (也可双击右键)" title="Gemini 实时对话（双击右键也可弹出）">💬</button><button id="settings" aria-label="打开设置">☰</button></div>
+<div class="agy-motion interactive" id="motion" tabindex="0" role="button" aria-label="猫娘，点击互动、拖动移动或双击右键对话"><div class="agy-face">
+<img class="agy-frame agy-frame--idle" src="../../assets/character-packs/gemini-star-v1/frames/idle.png" alt="Gemini 猫娘" draggable="false">
+<img class="agy-expression agy-expression--proud" src="../../assets/character-packs/gemini-star-v1/frames/proud-v3.png" alt="" draggable="false">
+<img class="agy-expression agy-expression--crying" src="../../assets/character-packs/gemini-star-v1/frames/sad-v3.png" alt="" draggable="false">
+<img class="agy-effect agy-effect--thinking" src="../../assets/ui/effects/thinking-dots.svg" alt="">
+<img class="agy-effect agy-effect--sparkle" src="../../assets/ui/effects/sparkle.svg" alt="">
+<img class="agy-effect agy-effect--tear" src="../../assets/ui/effects/teardrop.svg" alt="">
+<img class="agy-effect agy-effect--heart" src="../../assets/ui/effects/heart.svg" alt=""></div></div></div></main><script src="personality.js"></script><script src="renderer.cjs"></script></body></html>

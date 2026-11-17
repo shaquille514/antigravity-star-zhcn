@@ -1,0 +1,714 @@
+/**
+ * 客户端 UI 真实场景黄金语义断言与单源引擎回归测试套件 (Single-Source Golden Snapshots)
+ *
+ * 核心升级：
+ * 1. 【单源引用】彻底废黜独立的 translateSingleUnit 影子副本，直接加载 core/i18n-runtime.js 生产引擎
+ * 2. 【黄金语义断言】使用 assert.strictEqual 精确对比预期汉化结果，杜绝 res !== tc 的假阳性漏洞
+ * 3. 【不变性模糊测试】针对时间倒计时、模型插值、子智能体数量等动态模板开展 Invariant Fuzzing
+ */
+
+const assert = require('assert');
+const path = require('path');
+const { createI18nEngine } = require('../core/i18n-runtime.js');
+const dict = require('../dict/zh-CN.json');
+
+const engine = createI18nEngine(dict);
+
+console.log('🧪 === 开始执行单源引擎驱动的截图黄金语义回归测试 ===\n');
+
+// 来自历史真实截图与上游界面更新的黄金语义映射集
+const goldenCases = [
+  { input: 'Enter always submits. This adds a second shortcut.', expected: 'Enter 始终用于提交。此处可添加第二个提交快捷键。' },
+  { input: 'Pin / Unpin Conversation', expected: '置顶 / 取消置顶会话' },
+  { input: 'Side Questions', expected: '旁路提问' },
+  { input: 'Ask /btw', expected: '提问 /btw' },
+  { input: 'Go to Accounts', expected: '前往账号' },
+  { input: 'Log in', expected: '登录' },
+  { input: 'Permanently delete Settings including 1 conversation.', expected: '永久删除 Settings 及其中的 1 个会话。' },
+  { input: 'No MCP servers found for "Settings"', expected: '未找到匹配“Settings”的 MCP 服务器' },
+  // App 2.32.1: fixed UI from the shipped frontend; author text and identifiers stay original in DOM tests.
+  { input: 'Jump to Previous Prompt', expected: '跳转到上一条提示词' },
+  { input: 'Jump to Next Prompt', expected: '跳转到下一条提示词' },
+  { input: 'Submit Prompt (Alternate to Enter)', expected: '提交提示词（替代 Enter）' },
+  { input: 'Copy sign-in link', expected: '复制登录链接' },
+  { input: 'Trouble signing in? Enter authorization code', expected: '登录遇到问题？输入授权码' },
+  { input: 'Sign in in your browser, then paste the authorization code shown on the callback page.', expected: '在浏览器中登录，然后粘贴回调页面显示的授权码。' },
+  { input: 'Authorization code', expected: '授权码' },
+  { input: 'Paste authorization code', expected: '粘贴授权码' },
+  { input: 'Submit code', expected: '提交授权码' },
+  { input: 'Authorization code was rejected. Paste a fresh code and try again.', expected: '授权码被拒绝。请粘贴新的授权码后重试。' },
+  { input: 'Blocked: file type not allowed', expected: '已阻止：不允许此文件类型' },
+  { input: 'Sign in required', expected: '需要登录' },
+  { input: 'Starting', expected: '正在启动' },
+  { input: 'Fix with Agent', expected: '使用智能体修复' },
+  { input: '1 MCP server failed to start', expected: '1 个 MCP 服务器启动失败' },
+  { input: '12 MCP servers failed to start', expected: '12 个 MCP 服务器启动失败' },
+  { input: "Default needs the terminal sandbox, which isn't available on this host.", expected: '默认模式需要终端沙箱，但此主机不支持终端沙箱。' },
+  { input: "Auto needs the terminal sandbox, which isn't available on this host.", expected: '自动模式需要终端沙箱，但此主机不支持终端沙箱。' },
+  { input: "Default and Auto need the terminal sandbox, which isn't available on this host.", expected: '默认和自动模式需要终端沙箱，但此主机不支持终端沙箱。' },
+  { input: 'Welcome back, Alex. Where should we pick up?', expected: '欢迎回来，Alex。我们从哪里继续？' },
+  { input: 'Select project, current: No Project', expected: '选择项目，当前无项目关联' },
+  { input: 'Select project, current: Settings', expected: '选择项目，当前：Settings' },
+  { input: 'Hey Alex, what should we build today?', expected: '你好，Alex，今天想构建什么？' },
+  { input: "Good to see you, Alex. What's next?", expected: '很高兴见到你，Alex。接下来做什么？' },
+  { input: 'Hey there, what should we build today?', expected: '你好，今天想构建什么？' },
+  { input: 'Welcome back. Where should we pick up?', expected: '欢迎回来。我们从哪里继续？' },
+  { input: "Good to see you. What's next?", expected: '很高兴见到你。接下来做什么？' },
+  { input: 'Select an Antigravity action', expected: '选择 Antigravity 操作' },
+  { input: 'Open Changelog', expected: '打开更新日志' },
+  { input: 'Toggle Chat Focus', expected: '切换对话焦点' },
+  { input: 'Focus Panel', expected: '聚焦面板' },
+  { input: 'Accept Changes in All Files', expected: '接受所有文件中的更改' },
+  { input: 'Reject Changes in All Files', expected: '拒绝所有文件中的更改' },
+  { input: 'Accept Changes in Current File', expected: '接受当前文件中的更改' },
+  { input: 'Reject Changes in Current File', expected: '拒绝当前文件中的更改' },
+  { input: 'Show Menu', expected: '显示菜单' },
+  { input: 'Add Comment to Chat', expected: '将评论添加到对话' },
+  { input: 'Delete Comment', expected: '删除评论' },
+  { input: 'Cancel Edit', expected: '取消编辑' },
+  { input: 'Comment for Antigravity', expected: '为 Antigravity 添加评论' },
+  // Antigravity 2.29.0: user-reported settings omissions (2026-11-04).
+  { input: 'Work locally on repo-a/, 资料/', expected: '在 repo-a/, 资料/ 上本地工作' },
+  { input: 'Worktree from repo-a/, repo-b/, and reuse shared/', expected: '从 repo-a/, repo-b/ 创建工作树，并复用 shared/' },
+  { input: 'Shortcut Ctrl+Shift+⇥ for Previous Side Panel Tab', expected: '上一个侧面板标签页的快捷键：Ctrl+Shift+⇥' },
+  { input: 'Remove shortcut Alt+M for Mute Voice Mic', expected: '移除将语音麦克风静音的快捷键：Alt+M' },
+  { input: 'Add shortcut for Toggle Maximize Side Panel', expected: '为切换侧面板最大化添加快捷键' },
+  { input: 'Start Voice mode', expected: '启动语音模式' },
+  // Antigravity 2.31.0 download, project, plugin, and call-summary controls.
+  { input: "Allow the browser agent to download a file?", expected: "允许浏览器智能体下载文件吗？" },
+  { input: "Yes, allow this download", expected: "是，允许本次下载" },
+  { input: "Yes, allow this time", expected: "是，仅本次允许" },
+  { input: "Yes, and always allow in this conversation", expected: "是，在此会话中始终允许" },
+  { input: "Yes, save rule in this conversation", expected: "是，将规则保存到此会话" },
+  { input: "Yes, save rule globally", expected: "是，将规则保存到全局" },
+  { input: "Yes, and always allow", expected: "是，始终允许" },
+  { input: "From", expected: "来源" },
+  { input: "Redirected from", expected: "重定向来源" },
+  { input: "Type", expected: "类型" },
+  { input: "Save to", expected: "保存到" },
+  { input: "Remote", expected: "远程" },
+  { input: "This computer", expected: "此电脑" },
+  { input: "Runs on this computer", expected: "在此电脑上运行" },
+  { input: "Search Workspaces…", expected: "搜索工作区…" },
+  { input: "Search Remote…", expected: "搜索远程项目…" },
+  { input: "Your Remote setting", expected: "您的远程设置" },
+  { input: "Your This Computer setting", expected: "您在此电脑上的设置" },
+  { input: "Create a project on this computer or remotely.", expected: "在此电脑上或远程创建项目。" },
+  { input: "Create a new project from one or more folders.", expected: "从一个或多个文件夹创建新项目。" },
+  { input: "Toggle Google Cloud projects", expected: "展开或收起 Google Cloud 项目列表" },
+  { input: "Open skill page", expected: "打开技能页面" },
+  { input: "Finish signing in in your browser", expected: "在浏览器中完成登录" },
+  { input: "Signed in", expected: "已登录" },
+  { input: "Not connected", expected: "未连接" },
+  { input: "Summarizing call…", expected: "正在总结通话…" },
+  { input: "Yes, allow downloads from https://example.com:8443 for this run", expected: "是，允许本次运行从 https://example.com:8443 下载" },
+  { input: "Yes, allow downloads from example.com in this conversation", expected: "是，允许此会话从 example.com 下载" },
+  { input: "Yes, always allow downloads from example.com", expected: "是，始终允许从 example.com 下载" },
+  // Antigravity 2.30.0 layout, browser, microphone, and permissions surfaces.
+  { input: 'Hello, Alex.', expected: '你好，Alex。' },
+  { input: 'Welcome back, Alex.', expected: '欢迎回来，Alex。' },
+  { input: 'Hi Alex.', expected: '你好，Alex。' },
+  { input: 'Good to see you, Alex.', expected: '很高兴见到你，Alex。' },
+  { input: 'Hi there.', expected: '你好。' },
+  { input: 'Hello.', expected: '你好。' },
+  { input: 'Welcome back.', expected: '欢迎回来。' },
+  { input: 'Good to see you.', expected: '很高兴见到你。' },
+  { input: "Interface Layout", expected: "界面布局" },
+  { input: "Knowledge Work", expected: "知识工作" },
+  { input: "Software Engineering", expected: "软件工程" },
+  { input: "Simplified interface for research, writing, and everyday tasks.", expected: "适用于研究、写作和日常任务的简洁界面。" },
+  { input: "Full interface for coding, developer tools, and managing agents.", expected: "提供编程、开发工具和智能体管理的完整界面。" },
+  { input: "Let's tailor the experience for you. What best describes your work?", expected: "我们将为您调整使用体验。哪一项最符合您的工作？" },
+  { input: "Terminal Placement", expected: "终端位置" },
+  { input: "Choose where terminal sessions appear.", expected: "选择终端会话的显示位置。" },
+  { input: "Bottom Panel", expected: "底部面板" },
+  { input: "Side Panel", expected: "侧面板" },
+  { input: "Optimize the interface and terminal output for screen readers.", expected: "为屏幕阅读器优化界面和终端输出。" },
+  { input: "Your connection is not private", expected: "您的连接不是私密连接" },
+  { input: "Attackers might be trying to steal your information from", expected: "攻击者可能试图窃取您在" },
+  { input: "(for example, passwords, messages, or credit cards).", expected: "上的信息（例如密码、消息或信用卡信息）。" },
+  { input: "Hide advanced", expected: "隐藏高级选项" },
+  { input: "Back to safety", expected: "返回安全页面" },
+  { input: "Certificate details", expected: "证书详情" },
+  { input: "Cookies and site data", expected: "Cookie 和网站数据" },
+  { input: "Clear cookies and site data", expected: "清除 Cookie 和网站数据" },
+  { input: "Open the page in system browser", expected: "在系统浏览器中打开此页面" },
+  { input: "Reconnect", expected: "重新连接" },
+  { input: "Allow microphone access to start Voice", expected: "请允许访问麦克风以启动语音模式" },
+  { input: "Privacy Settings", expected: "隐私设置" },
+  { input: "System Settings", expected: "系统设置" },
+  { input: "Your sign-in needs an update. Sign in again to use Voice.", expected: "您的登录状态需要更新。请重新登录以使用语音模式。" },
+  { input: "Your sign-in needs an update.", expected: "您的登录状态需要更新。请" },
+  { input: "to use Voice.", expected: "以使用语音模式。" },
+  { input: "Microphone blocked. Allow in", expected: "麦克风访问被阻止。请在系统中允许访问：" },
+  { input: "Microphone blocked. Allow in Privacy Settings.", expected: "麦克风访问被阻止。请在隐私设置中允许访问。" },
+  { input: "Microphone blocked. Allow in System Settings.", expected: "麦克风访问被阻止。请在系统设置中允许访问。" },
+  { input: "Microphone blocked in browser site settings.", expected: "浏览器的网站设置已阻止访问麦克风。" },
+  { input: "Microphone off in System Settings > Privacy & Security > Microphone.", expected: "麦克风访问已在“系统设置 > 隐私与安全性 > 麦克风”中关闭。" },
+  { input: "Microphone off in Settings > Privacy & security > Microphone.", expected: "麦克风访问已在“设置 > 隐私和安全性 > 麦克风”中关闭。" },
+  { input: "Microphone blocked in system settings.", expected: "系统设置已阻止访问麦克风。" },
+  { input: "No microphone found. Connect one.", expected: "未检测到麦克风。请连接一个麦克风。" },
+  { input: "Microphone is in use or unavailable.", expected: "麦克风正在使用中或不可用。" },
+  { input: "Microphone didn't respond.", expected: "麦克风无响应。" },
+  { input: "Missing a repository? Configure on GitHub", expected: "找不到仓库？前往 GitHub 配置" },
+  { input: "Modify permissions for file and terminal tools.", expected: "修改文件和终端工具的权限。" },
+  { input: "Cloud Permissions", expected: "云端权限" },
+  { input: "Controls permissions for remote conversations.", expected: "管理远程会话的权限。" },
+  { input: "Diff contents are no longer available.", expected: "差异内容已不可用。" },
+  { input: "Failed to load diff contents.", expected: "无法加载差异内容。" },
+  { input: "Proceed to example.com:8443 (unsafe)", expected: "继续前往 example.com:8443（不安全）" },
+  { input: "Site data cleared for localhost:8080.", expected: "已清除 localhost:8080 的网站数据。" },
+  { input: "Could not clear site data for [::1]:8080.", expected: "无法清除 [::1]:8080 的网站数据。" },
+  { input: "No compatible devices found.", expected: "未找到兼容的设备。" },
+  { input: "This page wants to connect to a USB device", expected: "此网页请求连接 USB 设备" },
+  { input: "This page wants to connect to a HID device", expected: "此网页请求连接 HID 设备" },
+  { input: "This page wants to connect to a serial port", expected: "此网页请求连接串口" },
+  { input: "An embedded page on this page wants to connect to a USB device", expected: "此网页中的嵌入页面请求连接 USB 设备" },
+  { input: "An embedded page on this page wants to connect to a HID device", expected: "此网页中的嵌入页面请求连接 HID 设备" },
+  { input: "An embedded page on this page wants to connect to a serial port", expected: "此网页中的嵌入页面请求连接串口" },
+  { input: "Switch mic", expected: "切换麦克风" },
+  { input: "Dismiss microphone warning", expected: "关闭麦克风警告" },
+  { input: "An embedded page at https://example.com:8443 wants to connect to a HID device", expected: "来自 https://example.com:8443 的嵌入页面请求连接 HID 设备" },
+  { input: "An embedded page at https://example.com wants to connect to a serial port", expected: "来自 https://example.com 的嵌入页面请求连接串口" },
+  { input: "https://example.com wants to connect to a USB device", expected: "https://example.com 请求连接 USB 设备" },
+  { input: "http://[::1]:8080 wants to connect to a serial port", expected: "http://[::1]:8080 请求连接串口" },
+  // Antigravity 2.29.1 voice controls, connection states, and transcript UI.
+  { input: 'End Voice mode', expected: '结束语音模式' },
+  { input: 'Voice mode in progress', expected: '语音模式进行中' },
+  { input: 'Mute mic', expected: '将麦克风静音' },
+  { input: 'Unmute mic', expected: '取消麦克风静音' },
+  { input: 'Back to chat', expected: '返回对话' },
+  { input: 'Voice speed', expected: '语速' },
+  { input: 'Mute Antigravity', expected: '将 Antigravity 静音' },
+  { input: 'Unmute Antigravity', expected: '取消 Antigravity 静音' },
+  { input: 'Listening. Ask anything.', expected: '正在聆听，您可以随时提问。' },
+  { input: 'Nothing said yet', expected: '暂无发言' },
+  { input: "Couldn't connect", expected: '无法连接' },
+  { input: 'Microphone blocked. Allow mic access.', expected: '无法访问麦克风。请允许访问麦克风。' },
+  { input: 'Still connecting…', expected: '仍在连接…' },
+  { input: 'Connecting…', expected: '正在连接…' },
+  { input: 'Message this chat', expected: '在此对话中输入消息' },
+  { input: 'Write a message', expected: '撰写消息' },
+  { input: 'Close message', expected: '关闭消息输入框' },
+  { input: 'Drag to move', expected: '拖动以移动' },
+  { input: 'Voice transcript', expected: '语音转写' },
+  { input: 'Voice speed, 1.25x', expected: '语速：1.25 倍' },
+  { input: 'Voice mode, 0:05', expected: '语音模式，0:05' },
+  { input: 'Open Voice transcript, 2m 05s', expected: '打开语音转写，2m 05s' },
+  { input: 'Work in a New Worktree', expected: '在新工作树中工作' },
+  { input: 'Keeps your checkout untouched', expected: '保持当前检出的工作区不变' },
+  { input: 'Connectors', expected: '连接器' },
+  { input: 'Search connectors', expected: '搜索连接器' },
+  { input: 'Browse Connectors', expected: '浏览连接器' },
+  { input: '7 on for this conversation', expected: '本会话已启用 7 项' },
+  { input: '7 on', expected: '已启用 7 项' },
+  { input: '1 tool', expected: '1 个工具' },
+  { input: 'Download Location', expected: '下载位置' },
+  { input: 'Folder where files downloaded in the built-in browser are saved.', expected: '内置浏览器下载文件的保存文件夹。' },
+  { input: 'Change', expected: '更改' },
+  { input: 'Change...', expected: '更改...' },
+  { input: 'Change…', expected: '更改…' },
+  { input: 'Browsing History', expected: '浏览历史' },
+  { input: 'Clear visited URLs and autocomplete suggestions from the built-in browser.', expected: '清除内置浏览器的访问记录和自动补全建议。' },
+  { input: 'Browser Subagent', expected: '浏览器子智能体' },
+  { input: 'Voice mode', expected: '语音模式' },
+  { input: 'Voice', expected: '语音' },
+  { input: 'The voice used in Voice mode. Powered by Gemini Live.', expected: '语音模式使用的声音，由 Gemini Live 提供支持。' },
+  { input: 'Not set', expected: '未设置' },
+  { input: 'Microphone', expected: '麦克风' },
+  { input: 'Input device for voice mode and dictation.', expected: '语音模式和听写使用的输入设备。' },
+  { input: 'System default', expected: '系统默认' },
+  { input: "How loud Antigravity's voice is.", expected: 'Antigravity 的语音音量。' },
+  { input: 'Previous Side Panel Tab', expected: '上一个侧面板标签页' },
+  { input: 'Next Side Panel Tab', expected: '下一个侧面板标签页' },
+  { input: 'Mute Voice Mic', expected: '将语音麦克风静音' },
+  { input: 'Mute Voice Speaker', expected: '将语音扬声器静音' },
+  { input: 'Toggle Maximize Side Panel', expected: '切换侧面板最大化' },
+  { input: 'Manage project folders and settings.', expected: '管理项目文件夹和设置。' },
+  { input: 'Settings for conversations outside of projects.', expected: '项目外会话的设置。' },
+  { input: 'Chat', expected: '对话' },
+  { input: 'Conversation Steps', expected: '对话步骤' },
+  { input: 'Choose how much detail is shown during a conversation.', expected: '选择对话过程中显示的详细程度。' },
+  { input: 'Verbose', expected: '详细' },
+  { input: 'No automations yet', expected: '暂无自动化' },
+  { input: "Run a prompt on a schedule, like a morning summary of yesterday's changes. Runs show up here.", expected: '按计划运行提示词，例如每天早晨汇总昨天的更改。运行记录将显示在此处。' },
+  { input: 'Always on', expected: '持续运行' },
+  { input: 'Paused', expected: '已暂停' },
+  { input: 'Downloads', expected: '下载' },
+  { input: 'Screen Reader Mode', expected: '屏幕阅读器模式' },
+  { input: 'Accessibility', expected: '无障碍' },
+  { input: 'Font', expected: '字体' },
+  { input: 'Close tabs to the left', expected: '关闭左侧标签页' },
+  { input: 'Hi Alex, what can we get done today?', expected: '你好，Alex，今天想完成什么？' },
+  { input: 'Hi 小明, what can we get done today?', expected: '你好，小明，今天想完成什么？' },
+  { input: 'Version 2.29.0', expected: '版本 2.29.0' },
+  { input: 'Version 2.29.0-insiders.1', expected: '版本 2.29.0-insiders.1' },
+  // Screenshot 1: App Settings (media_1789717290478.png)
+  { input: "App Settings", expected: "应用设置" },
+  { input: "Manage application settings.", expected: "管理应用程序设置。" },
+  { input: "Prevent Sleep", expected: "阻止系统休眠" },
+  { input: "Prevent the computer from sleeping while the app is running.", expected: "在应用运行期间阻止计算机进入休眠状态。" },
+  { input: "Keep In Menu Bar", expected: "保持在菜单栏/托盘" },
+  { input: "Show in the menu bar when closed. Right-click to quit.", expected: "关闭窗口后仍保留在菜单栏/系统托盘中。右键点击可彻底退出。" },
+  { input: "Notifications", expected: "通知" },
+  { input: "Notification Sounds", expected: "通知提示音" },
+  { input: "Notification Settings", expected: "通知设置" },
+  { input: "Network Proxy", expected: "网络代理" },
+  { input: "Configure network proxy settings.", expected: "配置网络代理设置。" },
+  { input: "Proxy Mode", expected: "代理模式" },
+  { input: "Direct (no proxy)", expected: "直接连接 (不使用代理)" },
+  { input: "Proxy URL", expected: "代理服务器地址" },
+  { input: "Save Proxy Settings", expected: "保存代理设置" },
+  { input: "Telemetry", expected: "遥测诊断" },
+  { input: "Diagnostic Data", expected: "诊断数据" },
+  { input: "Crash Reporting", expected: "崩溃报告" },
+  { input: "Terminal", expected: "终端" },
+  { input: "Terminal Shell", expected: "终端 Shell" },
+  { input: "Auto Check for Updates", expected: "自动检查更新" },
+  { input: "Language", expected: "语言" },
+  { input: "Theme", expected: "主题风格" },
+  { input: "General", expected: "通用" },
+  { input: "Advanced", expected: "高级" },
+  { input: "Shortcuts", expected: "快捷键" },
+  { input: "Documentation", expected: "官方文档" },
+  { input: "Report Issue", expected: "报告问题" },
+  { input: "Quit", expected: "退出" },
+
+  // Screenshot 2: Model & Quota (media_1789717346005.png)
+  { input: "You currently don't have any MCP Servers installed.", expected: "您当前尚未安装任何 MCP 服务。" },
+  { input: "Models & Usage", expected: "模型与用量" },
+  { input: "Manage your model quota and credits.", expected: "管理您的模型配额与积分。" },
+  { input: "Model Credits", expected: "模型积分" },
+  { input: "Enable AI Credit Overages", expected: "启用超额 AI 积分计费" },
+  { input: "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.", expected: "开启后，当模型配额耗尽时，Antigravity 将使用您的 AI 积分来完成模型请求。Antigravity 将始终优先消耗模型配额，然后再使用 AI 积分。" },
+  { input: "Gemini Models", expected: "Gemini 模型" },
+  { input: "Weekly Limit Remaining", expected: "每周剩余额度" },
+  { input: "Five Hour Limit Remaining", expected: "5 小时剩余额度" },
+  { input: "You have used some of your weekly limit, it will fully refresh in 6 days, 6 hours.", expected: "您已消耗了部分每周额度，将在 6 天 6 小时 后完全重置刷新。" },
+  { input: "You have used some of your 5 hour limit, it will fully refresh in 3 hours, 21 minutes.", expected: "您已消耗了部分 5 小时额度，将在 3 小时 21 分钟 后完全重置刷新。" },
+  { input: "Claude and GPT models", expected: "Claude 与 GPT 模型" },
+  { input: "You have hit your 5-hour limit, so the weekly limit does not currently apply. Your 5-hour limit will refresh in 3 hours, 51 minutes.", expected: "您已达到 5 小时上限，因此每周额度当前不适用。您的 5 小时额度将在 3 小时 51 分钟 后重置刷新。" },
+  { input: "You have hit your 5-hour limit, it will refresh in 3 hours, 51 minutes. If on a supported paid plan, you can use AI credits in the interim.", expected: "您已达到 5 小时上限，将在 3 小时 51 分钟 后重置刷新。如果使用的是支持的付费套餐，您可以在此期间使用 AI 积分。" },
+
+  // Screenshot 3: Chat Settings (media_1789717420110.png)
+  { input: "Chat Settings", expected: "对话设置" },
+  { input: "Verbose Agent Chat", expected: "详细智能体对话输出" },
+  { input: "Display and preserve intermediate thinking steps.", expected: "显示并保留中间思考过程步骤。" },
+  { input: "Conversation Width", expected: "对话面板宽度" },
+  { input: "Configure the maximum width of the conversation panel.", expected: "配置对话面板的最大显示宽度。" },
+  { input: "Narrow", expected: "窄" },
+  { input: "Wide", expected: "宽" },
+
+  // Screenshot 4: Themes & Customization (media_1789717451009.png)
+  { input: "Select light, dark, or inherit system settings.", expected: "选择浅色、深色或跟随系统设置。" },
+  { input: "Preset", expected: "预设" },
+  { input: "Default Light", expected: "默认浅色" },
+  { input: "Default Dark", expected: "默认深色" },
+  { input: "Background", expected: "背景色" },
+  { input: "Foreground", expected: "前景色" },
+  { input: "Accent", expected: "强调色" },
+
+  // Screenshot 5: Application & Remote Control (media_1789750775653.png & media_1789750797195.png)
+  { input: "Application", expected: "应用设置" },
+  { input: "Manage Antigravity app settings.", expected: "管理 Antigravity 应用设置。" },
+  { input: "Work with local agents from another device.", expected: "从其他设备与本地智能体协同工作。" },
+  { input: "Device Name", expected: "设备名称" },
+  { input: "Scan the code to open this device in Remote Control, or copy link.", expected: "扫描二维码在远程控制中打开此设备，或复制链接。" },
+
+  // Screenshot 6: Permissions & Sandboxing (media_1789750937272.png & media_1789750959891.png)
+  { input: "Configure allowed commands outside the sandbox.", expected: "配置沙箱外允许执行的命令。" },
+  { input: "Configure external tools via Model Context Protocol.", expected: "通过模型上下文协议 (Model Context Protocol) 配置外部工具。" },
+  { input: "No MCP servers installed", expected: "未安装 MCP 服务" },
+  { input: "Build With Google Plugins", expected: "Build With Google 插件目录" },
+  { input: "Browse and enable plugins from the Build With Google catalog.", expected: "浏览并启用 Build With Google 目录中的插件。" },
+
+  // Screenshot 7: Inherit Global & Project Permissions (media_1789624999478.png)
+  { input: "Inherit Global", expected: "继承全局设置" },
+  { input: "Global Permissions", expected: "全局权限" },
+  { input: "Project Permissions", expected: "项目权限" },
+  { input: "Proceed in Sandbox", expected: "在沙箱中执行" },
+  { input: "Require Review", expected: "需要复核" },
+  { input: "Vetted (Preview)", expected: "已审查 (预览)" },
+  { input: "Turbo", expected: "极速" },
+  { input: "Always Proceed", expected: "总是直接继续" },
+  { input: 'Warning: "Always Proceed" is enabled without sandbox protection. This is very dangerous and we do not recommend doing this.', expected: '警告：“总是直接继续”在无沙箱保护的情况下已启用。这非常危险，我们不建议这样做。' },
+
+  // Screenshot 8: Drawer Panel & Dynamic Status (media_1789625187011.png)
+  { input: "Files Changed", expected: "已修改文件" },
+  { input: "Skills Used", expected: "已使用技能" },
+  { input: "See all (79)", expected: "查看全部 (79)" },
+  { input: "(2 subagents)", expected: "(2 个子智能体)" },
+  { input: "Thought for 12.5s", expected: "已思考 12.5 秒" },
+  { input: "Jan 15 - Feb 3", expected: "1月 15日 - 2月 3日" },
+  { input: "Sep 17, 2:25 PM", expected: "9月 17日 下午 2:25" },
+  { input: "5 minutes ago", expected: "5 分钟前" },
+  { input: "Just now", expected: "刚刚" },
+
+  // Screenshot 9: Battle Mode & Surveys (media_1789756124531.png & media_1789756522985.png)
+  { input: "Battle Mode", expected: "对决模式" },
+  { input: "Best-of-N", expected: "多候选对决 (Best-of-N)" },
+  { input: "Select Winner", expected: "选择优胜方案" },
+  { input: "Winner Survey", expected: "优胜方案评选调查" },
+  { input: "Both are good", expected: "两项均表现优秀" },
+  { input: "Tie", expected: "平局" },
+
+  // Screenshot 10: Inherits / Includes Complex Patterns (media_1789789564305.png)
+  { input: "Inherits your Global Permissions when working in this project.", expected: "在此项目中工作时，继承您的全局权限。" },
+  { input: "Inherits your Global Permissions", expected: "继承您的全局权限" },
+  { input: "Also includes Global Permissions when working in this project.", expected: "在此项目中工作时也包含全局权限。" },
+  { input: "Also includes Global Permissions when working in this project. Learn more.", expected: "在此项目中工作时也包含全局权限。了解更多。" },
+  { input: "Also includes Global Permissions when working in this project", expected: "在此项目中工作时也包含全局权限" },
+
+  // Screenshot 11: Dynamic Reset Counters
+  { input: "Resets in 4d 13h", expected: "4 天 13 小时后重置" },
+  { input: "Resets in 2h 35m", expected: "2 小时 35 分钟后重置" },
+  { input: "Resets in 4d 13h.", expected: "4 天 13 小时后重置。" },
+  { input: "Resets in 2h 35m.", expected: "2 小时 35 分钟后重置。" },
+  { input: "Resets in 5m 20s", expected: "5 分 20 秒后重置" },
+  { input: "Resets in 4d", expected: "4 天后重置" },
+  { input: "Resets in 2h", expected: "2 小时后重置" },
+  { input: "Resets in 35m", expected: "35 分钟后重置" },
+  { input: "Resets in 10s", expected: "10 秒后重置" },
+  { input: "Resets in less than a minute", expected: "不到 1 分钟后重置" },
+  { input: "Resets soon", expected: "即将重置" },
+  { input: "Refreshes in 4d 13h", expected: "4 天 13 小时后重置刷新" },
+  { input: "Refreshes in 2h 35m", expected: "2 小时 35 分钟后重置刷新" },
+  { input: "Contrast", expected: "对比度" },
+  { input: "Strong", expected: "高对比度" },
+  { input: "High Contrast", expected: "高对比度" },
+  { input: "+ New", expected: "+ 新建" },
+  { input: "New", expected: "新建" },
+
+  // Screenshot 12: Scheduled Tasks (media_1789790849888.png)
+  { input: "Search tasks...", expected: "搜索任务..." },
+  { input: "No scheduled tasks configured.", expected: "尚未配置任何定时任务。" },
+  { input: "New Scheduled Task", expected: "新建定时任务" },
+  { input: "scheduled task", expected: "定时任务" },
+  { input: "Name", expected: "名称" },
+  { input: "Enter scheduled task name...", expected: "输入定时任务名称..." },
+  { input: "Schedule", expected: "定时计划" },
+  { input: "Daily", expected: "每天" },
+  { input: "around", expected: "大约" },
+  { input: "Prompt", expected: "提示词" },
+  { input: "Enter a prompt for the agent to run...", expected: "输入供智能体执行的提示词..." },
+  { input: "All scheduled tasks run as Flash.", expected: "所有定时任务均以 Flash 模型运行。" },
+  { input: "Add Scheduled Task", expected: "添加定时任务" },
+
+  // Screenshot 13: Search conversations (media_1789790888612.png)
+  { input: "Search conversations...", expected: "搜索会话..." },
+
+  // Screenshot 14: Display menu (media_1789790931048.png)
+  { input: "Display", expected: "显示方式" },
+  { input: "Project + Worktree", expected: "项目 + 工作树" },
+
+  // Screenshot 15: Filter menu Only Unread (media_1789790951393.png)
+  { input: "Only Unread", expected: "仅未读" },
+
+  // Screenshot 16: Queued Messages Strategy Tooltips (media_1789793151370.png & media_1789793163093.png)
+  { input: "Queue until after the current turn.", expected: "排队等待，直至当前轮次结束。" },
+  { input: "Interrupt the agent and send immediately.", expected: "打断智能体并立即发送。" },
+
+  // v2.15.0 Core Features: Conversation Actions, Skins, CL Status, Plugins
+  { input: "Copy Conversation Markdown", expected: "复制会话 Markdown" },
+  { input: "Archive This Conversation", expected: "归档此会话" },
+  { input: "Find in Conversation", expected: "在会话中查找" },
+  { input: "Pin This Conversation", expected: "置顶此会话" },
+  { input: "Unpin This Conversation", expected: "取消置顶此会话" },
+  { input: "Rename This Conversation", expected: "重命名此会话" },
+  { input: "Move to New Group", expected: "移动到新分组" },
+  { input: "Product Skin", expected: "产品界面风格" },
+  { input: "Non-technical", expected: "非技术模式" },
+  { input: "Simplified interface without developer tooling.", expected: "无开发者工具的简化界面。" },
+  { input: "The full developer experience.", expected: "完整开发者体验。" },
+  { input: "Workspace CL Status", expected: "工作区 CL 状态" },
+  { input: "CL details unavailable", expected: "CL 详情不可用" },
+  { input: "Create a Plugin with the Agent", expected: "与智能体一起创建插件" },
+  { input: "This skill came from the marketplace, so you can add it again whenever you need it.", expected: "此技能来自应用市场，您可以随时按需再次添加。" },
+  { input: "Undo restores your entire workspace to its state at this point.", expected: "撤销会将整个工作区恢复到此节点的状态。" },
+
+  // History Menu & Batch Mark As Read (media_1789956060212.png)
+  { input: "Mark 1 conversation as read", expected: "将 1 个会话标记为已读" },
+  { input: "Mark all 5 conversations as read", expected: "将全部 5 个会话标记为已读" },
+  { input: "Mark as Read", expected: "标记为已读" },
+  { input: "Mark all as read", expected: "全部标记为已读" },
+  { input: "Failed to mark all as read", expected: "无法全部标记为已读" },
+  { input: "Are you sure you want to mark 1 conversation as read? This action cannot be undone.", expected: "您确定要将 1 个会话标记为已读吗？此操作无法撤销。" },
+  { input: "Are you sure you want to mark all 3 conversations as read? This action cannot be undone.", expected: "您确定要将全部 3 个会话标记为已读吗？此操作无法撤销。" },
+  { input: "Pinned Chats Only", expected: "仅固定会话" },
+  { input: "Workspace + Worktree", expected: "工作区 + 工作树" },
+  { input: "Archive Conversation", expected: "归档会话" },
+
+  // History Execution Control & Group Actions (media_1789956147036.png)
+  { input: "Stop Execution", expected: "停止执行" },
+  { input: "Restore Conversation", expected: "恢复会话" },
+  { input: "Archive conversation", expected: "归档会话" },
+  { input: "Group Actions", expected: "分组操作" },
+  { input: "Rename Group", expected: "重命名分组" },
+  { input: "Move Up", expected: "上移" },
+  { input: "Move Down", expected: "下移" },
+  { input: "Delete Group", expected: "删除分组" },
+  { input: "View Debug", expected: "查看调试信息" },
+  { input: "Stop Task", expected: "停止任务" },
+  { input: "Cancel Task", expected: "取消任务" },
+  { input: "Close Sidebar", expected: "关闭侧边栏" },
+  { input: "Clear Search", expected: "清除搜索" },
+
+  // Build With Google / Antigravity Plugins Catalog (media_1790531730315.png & media_1790531749495.png)
+  { input: "Build with Antigravity Plugins", expected: "Build with Antigravity 插件目录" },
+  { input: "Plugins are packaged collections of skills and MCPs to help the Agent in Antigravity work with Google developer products. You can always change your choices in Settings.", expected: "插件是技能与 MCP 的打包集合，用于辅助 Antigravity 中的智能体协同使用 Google 开发者产品。您随时可以在“设置”中更改选择。" },
+  { input: "Using the Antigravity Python SDK to build AI agents", expected: "使用 Antigravity Python SDK 构建 AI 智能体" },
+  { input: "Curated collection of agent skills for science.", expected: "精选用于科学计算与科研任务的智能体技能集合。" },
+  { input: "Prototype, build & run modern apps users love with Firebase's backend, AI, and operational infrastructure.", expected: "借助 Firebase 的后端、AI 与运维基础设施，快速构建、运行并打造深受用户喜爱的现代应用原型。" },
+  { input: "Skills providing tailored instructions for happy path Dart and Flutter development workflows.", expected: "为 Dart 与 Flutter 标准开发工作流提供量身定制指导的技能集合。" },
+  { input: "Build and prototype location-aware applications with Google Maps Platform. Integrate interactive maps, search and inspect Places details, calculate optimal routes.", expected: "使用 Google Maps Platform 构建和设计位置感知型应用原型。集成交互式地图、搜索与查看地点详情，并计算最佳路线。" },
+  { input: "Specialized suite of skills for data engineers and database practitioners on Google Cloud", expected: "专为 Google Cloud 上的数据工程师与数据库从业者打造的专业技能套件" },
+
+  // Baseline Model Quota Reached & Overages Banner (media_1790680500059.png)
+  { input: "Baseline model quota reached", expected: "已达到基础模型配额上限" },
+  { input: "Model quota reached", expected: "已达到模型配额上限" },
+  { input: "Insufficient AI Credits", expected: "AI 积分不足" },
+  { input: "See Plans", expected: "查看套餐方案" },
+  { input: "See plans", expected: "查看套餐方案" },
+  { input: "Your plan's baseline quota will refresh on 2026/9/29 19:28:39.", expected: "您的套餐基础配额将于 2026/9/29 19:28:39 重置刷新。" },
+  { input: "Your plan's baseline quota will refresh on 2026/9/29 19:28:39. You can upgrade to a Google AI Ultra plan to receive higher rate limits.", expected: "您的套餐基础配额将于 2026/9/29 19:28:39 重置刷新。您可以升级至 Google AI Ultra 以获取更高的请求配额与速率上限。" },
+  { input: "To continue using this model now, enable AI Credit overages.", expected: "若要立即继续使用此模型，请启用超额 AI 积分计费。" },
+  { input: "Your AI credits balance is too low to continue.", expected: "您的 AI 积分余额不足，无法继续。" },
+  // 2.18.1 新增特性黄金语义回归断言 (Trajectory Debug / Plugin Auth / Token Budget / Telemetry / Billing / PDF Viewer)
+  { input: "Open Trajectory Debug View", expected: "打开轨迹调试视图" },
+  { input: "Trajectory Telemetry: Redacted (User Content Stripped)", expected: "轨迹遥测诊断：已脱敏（已剥离用户内容）" },
+  { input: "Use Global Settings", expected: "使用全局设置" },
+  { input: "Every command requires approval.", expected: "每条命令均需审批。" },
+  { input: "This plugin requires authentication before the agent can use its tools.", expected: "智能体使用此插件的工具前需要先完成身份验证。" },
+  { input: "Customization token budget exceeded. Large customizations are excluded from context.", expected: "已超出自定义项 Token 预算上限。体积较大的自定义项已从上下文中排除。" },
+  { input: "Telemetry is disabled in Settings", expected: "设置中已禁用遥测诊断" },
+  { input: "Select billing model", expected: "选择计费模式" },
+  { input: "Open in Built-in Browser", expected: "在内置浏览器中打开" },
+  { input: "You have 3 conversations in progress. Updating will interrupt them, and they will automatically resume once the update completes.", expected: "您当前有 3 个正在进行的会话。更新将暂时中断这些会话，并在更新完成后自动恢复。" },
+  { input: "Agents created by GitHub Helper run in a dedicated project with its own permissions, which you can change anytime in the project settings page. On top of those defaults, GitHub Helper requests the access below.", expected: "由 GitHub Helper 创建的智能体将在专属工作区中运行并拥有独立权限，您可以随时在设置页面中更改。除默认权限外，GitHub Helper 还请求以下访问权限。" },
+
+  // Screenshot 17 & 18: Customizations Token Usage Breakdown & Builtin Skills (media_1790717382150.png & media_1790717413152.png)
+  { input: "The breakdown below shows token usage from customizations like rules, skills, and MCP. If a budget is exceeded, large rules are demoted to path pointers and large customizations are excluded automatically.", expected: "下方的明细展示了来自规则、技能及 MCP 等自定义扩展的 Token 占用情况。如果超出预算，大型规则将自动降级为路径指针，大型自定义扩展将被自动排除。" },
+  { input: "Other Customizations", expected: "其他自定义扩展" },
+  { input: "5,785 / 20,000 tokens (28.9%)", expected: "5,785 / 20,000 个 Token (28.9%)" },
+  { input: "2,864 / 20,000 tokens (14.3%)", expected: "2,864 / 20,000 个 Token (14.3%)" },
+  { input: "(5,785 tokens) 28.9%", expected: "(5,785 个 Token) 28.9%" },
+  { input: "(5,785 tokens)", expected: "(5,785 个 Token)" },
+  { input: "Rules: 5,785 tokens", expected: "规则：5,785 个 Token" },
+  { input: "MCP Tools: 2,864 tokens", expected: "MCP 工具：2,864 个 Token" },
+  { input: "Show 1 breakdown", expected: "显示 1 项明细" },
+  { input: "Show 3 breakdowns", expected: "显示 3 项明细" },
+  { input: "Hide breakdown", expected: "隐藏明细" },
+  { input: "2 demoted", expected: "2 项已降级" },
+  { input: "3 excluded", expected: "3 项已排除" },
+  { input: "4 tools excluded", expected: "已排除 4 个工具" },
+  { input: "12 tools", expected: "12 个工具" },
+  { input: "Hide tools", expected: "隐藏工具" },
+  { input: "Exceeded the rules token budget. Full rule content (5,785 tokens) was replaced with a lightweight file-path pointer in context.", expected: "已超出规则 Token 预算。完整规则内容（5,785 个 Token）已在上下文中替换为轻量级文件路径指针。" },
+  { input: "Exceeded the customization token budget (2,864 tokens) and was excluded from context.", expected: "已超出自定义扩展 Token 预算（2,864 个 Token），已从上下文中排除。" },
+  { input: 'Interactive guide to design and create a scheduled background automation. Use this skill when the user wants to create an automated or recurring scheduled task (e.g. "summarize my emails every morning", "every Monday send me a to-do list"). Also triggered by the /automation slash command.', expected: '设计并创建后台定时自动化任务的交互式指南。当用户希望创建自动或周期性执行的定时任务（例如“每天早上汇总我的邮件”、“每周一发送待办清单”）时使用此技能，也可通过 /automation 斜杠命令触发。' },
+  { input: "How to manage and create plugins — namespaced bundles of skills, agents, rules, MCP servers and hooks that install, enable and disable as a single unit. Use this skill when the user wants to enable, disable, install or uninstall a plugin, when they want to create a new plugin, or when a new customization should be packaged into a plugin rather than left loose. Also triggered by the /plugin slash command. Don't use for the underlying customization system itself — discovery roots, loading priority, or authoring a standalone skill, agent, rule, hook or MCP server outside a plugin; see the customizations guide skill for those.", expected: "管理与创建插件的完整指南——插件是将技能、智能体、规则、MCP 服务与钩子打包在命名空间下的组合包，可作为整体安装、启用或禁用。当用户需要管理或创建插件时使用此技能（也可通过 /plugin 斜杠命令触发）。" },
+  { input: "Untitled Conversation", expected: "无标题会话" },
+  { input: "Plan Review Policy", expected: "计划审查策略" },
+  { input: "Expand (shift+click to expand every level below)", expected: "展开（按住 Shift 点击可展开下方所有层级）" },
+
+  // Screenshot: Project Entrypoint Tooltips (media_1790864222648.png & media_1790864231396.png)
+  { input: "Select a folder.", expected: "选择一个文件夹。" },
+  { input: "Instantly create a new project and folder to start building.", expected: "即刻创建新项目和文件夹以开始构建。" },
+  { input: "Create a new project using normal folders and/or citc workspaces.", expected: "使用常规文件夹和/或 CitC 工作区创建新项目。" },
+  { input: "Work in a CitC workspace.", expected: "在 CitC 工作区中工作。" },
+
+  // Screenshot: Workspace Switcher & Review Submenu (media_1791480523869_ad8ec36d.png & media_1791480605474_1dfd6323.png)
+  { input: "Local", expected: "本地" },
+  { input: "Staged index changes and working tree changes", expected: "暂存区索引更改与工作区更改" },
+  { input: "Branch main", expected: "分支 main" },
+  { input: "All changes since origin/main", expected: "自 origin/main 以来的全部更改" },
+  { input: "Files modified by the agent in this conversation", expected: "智能体在此会话中修改的文件" },
+  { input: "Search conversations based on their contents", expected: "基于内容搜索会话" },
+  { input: "Advanced Search", expected: "高级搜索" },
+  { input: "(Archived)", expected: "（已归档）" },
+  { input: "File Viewer", expected: "文件查看器" },
+  { input: "File edits", expected: "文件编辑" },
+  { input: "Terminal commands", expected: "终端命令" },
+  { input: "File reads", expected: "文件读取" },
+
+  // Screenshot: Project Context Menu (media_1791481237904_46267255.png)
+  { input: "Show in File Explorer", expected: "在文件资源管理器中显示" },
+  { input: "Show in Finder", expected: "在访达中显示" },
+  { input: "Show in File Manager", expected: "在文件管理器中显示" },
+
+  // Screenshot: Automations Panel & Dialog (media_1791481363483_44a43e14.png & media_1791481374404_dcddfb30.png)
+  { input: "New Automation", expected: "新建自动化" },
+  { input: "Enter automation name...", expected: "输入自动化名称..." },
+  { input: "No automations configured.", expected: "尚未配置任何自动化任务。" },
+
+  // Screenshot: Git Push Submenu & Whitespace Settings (media_1791599709989_1d949b44.png & media_1791599720021_426142eb.png)
+  { input: "No commits to push", expected: "无待推送的提交" },
+  { input: "No commits to pull", expected: "无待拉取的提交" },
+  { input: "1 commit to push", expected: "1 个待推送的提交" },
+  { input: "5 commits to push", expected: "5 个待推送的提交" },
+  { input: "2 commits to pull", expected: "2 个待拉取的提交" },
+  { input: "Hide Whitespace Changes", expected: "隐藏空白字符更改" },
+  { input: "Show Whitespace Changes", expected: "显示空白字符更改" },
+  { input: "Ignore Whitespace Changes", expected: "忽略空白字符更改" },
+  { input: "Ignore Whitespace", expected: "忽略空白字符" },
+
+  // Screenshot: Send Message Hotkey Tooltip (media_1791600587068_c5e53828.png)
+  { input: "Send message Enter", expected: "发送消息 Enter" },
+  { input: "Send message (Enter)", expected: "发送消息 (Enter)" },
+  { input: "Send message Return", expected: "发送消息 Return" },
+  { input: "Send message Ctrl+Enter", expected: "发送消息 Ctrl+Enter" },
+  { input: "Send Message Enter", expected: "发送消息 Enter" },
+  { input: "Send Message (Cmd+Enter)", expected: "发送消息 (Cmd+Enter)" },
+
+  // v2.23.0 Core Features: Full-screen Media Viewer, Permissions Picker, Folder/Zip Attachments, MCP Fix with Agent & Onboarding
+  { input: "Playback speed (< / >)", expected: "播放倍速 (< / >)" },
+  { input: "Playback speed 1.5x", expected: "播放倍速 1.5x" },
+  { input: "Zoom 150%, reset to fit", expected: "缩放 150%，点击重置为适应屏幕" },
+  { input: "Enlarged media: demo.mp4", expected: "放大查看媒体：demo.mp4" },
+  { input: "Download video", expected: "下载视频" },
+  { input: "Missing Folders", expected: "缺失文件夹" },
+  { input: "This project overrides your global permission settings.", expected: "此项目已覆盖您的全局权限设置。" },
+  { input: "Fix with Agent", expected: "使用智能体修复" },
+  { input: "Fix with Agent: github-mcp", expected: "使用智能体修复：github-mcp" },
+  { input: "Error restarting github-mcp: connection refused", expected: "重启 github-mcp 时出错：connection refused" },
+  { input: "Enable this plugin to use this prompt", expected: "启用此插件以使用该提示词" },
+  { input: "Install this plugin to use this prompt", expected: "安装此插件以使用该提示词" },
+  { input: "Search for \"gdocs\" in the Marketplace", expected: "在扩展市场中搜索“gdocs”" },
+  { input: "No plugins found for \"gdocs\".", expected: "未找到与“gdocs”相关的插件。" },
+  { input: "Folder has more than 1000 files", expected: "文件夹包含超过 1000 个文件" },
+  { input: "Zipping src…", expected: "正在压缩 src…" },
+  { input: "Could not attach folder \"node_modules\": Folder has more than 1000 files", expected: "无法附加文件夹“node_modules”：文件夹包含超过 1000 个文件" },
+  { input: "Custom Order", expected: "自定义顺序" },
+  { input: "What best describes you?", expected: "哪一项最符合您的身份？" },
+  { input: "General work", expected: "通用办公" },
+
+  // Screenshot: Permissions Picker Turbo & History Page Deprecation Banner (media_1791871554270_ee97639b.png & media_1791871725385_158c7378.png)
+  { input: "Agent permissions preset selector, current: Turbo", expected: "智能体权限预设选择器，当前：极速" },
+  { input: "This page is going away soon", expected: "此页面即将下线" },
+  { input: "Search conversations with", expected: "可通过左上角的" },
+  { input: "in the top left.", expected: "图标搜索会话。" },
+  { input: "View archived in the sidebar", expected: "可在侧边栏查看已归档会话" },
+  { input: "menu)", expected: "菜单)" },
+  { input: "Collapse All", expected: "全部折叠" },
+  { input: "Customize Sections", expected: "自定义分区" },
+  { input: "Customize sections", expected: "自定义分区" },
+  { input: "Links", expected: "链接" },
+  { input: "Toggle sidebar", expected: "切换侧边栏" },
+  { input: "Toggle Sidebar", expected: "切换侧边栏" },
+  { input: "Close sidebar", expected: "关闭侧边栏" },
+  { input: "Show sidebar", expected: "显示侧边栏" },
+  { input: "Hide sidebar", expected: "隐藏侧边栏" },
+
+  // 2.24.0 Screenshots: Sort Projects, Auto Pin, Replace with New & Overview Panel (media_1792254518368_0358e14a.png & media_1792254580614_1cea623d.png)
+  { input: "Sort Projects", expected: "项目排序" },
+  { input: "Sort projects", expected: "项目排序" },
+  { input: "Auto Pin", expected: "自动置顶" },
+  { input: "Auto pin", expected: "自动置顶" },
+  { input: "Replace with New", expected: "替换为新会话" },
+  { input: "Replace with new", expected: "替换为新会话" },
+  { input: "Authentication expired", expected: "身份验证已过期" },
+  { input: "Log back in", expected: "重新登录" },
+  { input: "Toggle Maximize Auxiliary Pane", expected: "切换辅助面板最大化" },
+  { input: "Toggle Overview Panel", expected: "切换概览面板" },
+  { input: "Overview Panel", expected: "概览面板" },
+
+  // 2.28.2 Screenshot: Search Across Conversations & View archived in sidebar popover (media_1793337580397_407c256f.png)
+  { input: "Search Across Conversations", expected: "跨会话搜索" },
+  { input: "View archived in the sidebar (▾ menu).", expected: "可在侧边栏查看已归档会话（▾ 菜单）。" },
+  { input: "View archived in the sidebar (▾ menu)", expected: "可在侧边栏查看已归档会话（▾ 菜单）" },
+  { input: "Search across conversations", expected: "跨会话搜索" },
+  { input: "Archived conversations", expected: "已归档会话" },
+  { input: "View archived", expected: "查看已归档" },
+  { input: "Show archived", expected: "显示已归档" },
+  { input: "Hide archived", expected: "隐藏已归档" }
+];
+
+console.log(`执行 ${goldenCases.length} 项黄金语义精确断言...`);
+let passedCount = 0;
+for (const gc of goldenCases) {
+  const actual = engine.translate(gc.input);
+  try {
+    assert.strictEqual(actual, gc.expected, `Input: "${gc.input}" -> Expected: "${gc.expected}", but got: "${actual}"`);
+    passedCount++;
+  } catch (err) {
+    console.error(`❌ [黄金语义断言失败] ${err.message}`);
+    process.exit(1);
+  }
+}
+console.log(`✅ [100% PASS] 全部 ${passedCount}/${goldenCases.length} 项黄金语义断言严格吻合！\n`);
+
+// 动态模式不变性模糊测试 (Invariant Fuzzing)
+console.log('🧪 === 执行动态模板不变性模糊测试 (Invariant Fuzzing) ===');
+
+// 1. 思考时间动态模糊
+const thoughtFuzz = [
+  { in: "Thought for 1s", exp: "已思考 1 秒" },
+  { in: "Thought for 45s", exp: "已思考 45 秒" },
+  { in: "Thought for 2m", exp: "已思考 2 分钟" },
+  { in: "Thought for 15m 30s", exp: "已思考 15 分 30 秒" },
+  { in: "Thought for 1h", exp: "已思考 1 小时" },
+  { in: "Thought for 2h 45m", exp: "已思考 2 小时 45 分钟" },
+  { in: "Thought for 1h 20m 15s", exp: "已思考 1 小时 20 分 15 秒" }
+];
+for (const tc of thoughtFuzz) {
+  assert.strictEqual(engine.translate(tc.in), tc.exp, `Thought Fuzz failed: ${tc.in}`);
+}
+console.log('✅ [PASS] 思考时间动态模式变异测试通过 (7/7)');
+
+// 2. 动态倒计时模糊测试
+const countdownFuzz = [
+  { in: "Resets in 7d", exp: "7 天后重置" },
+  { in: "Resets in 12h", exp: "12 小时后重置" },
+  { in: "Resets in 45m", exp: "45 分钟后重置" },
+  { in: "Resets in 30s", exp: "30 秒后重置" },
+  { in: "Resets in 3d 8h", exp: "3 天 8 小时后重置" },
+  { in: "Resets in 5h 15m", exp: "5 小时 15 分钟后重置" },
+  { in: "Resets in 2m 40s", exp: "2 分 40 秒后重置" }
+];
+for (const tc of countdownFuzz) {
+  assert.strictEqual(engine.translate(tc.in), tc.exp, `Countdown Fuzz failed: ${tc.in}`);
+}
+console.log('✅ [PASS] 倒计时动态模式变异测试通过 (7/7)');
+
+// 3. 插件、自动化与定时任务模型插值模糊测试
+const interpolationFuzz = [
+  { in: "All scheduled tasks run as Gemini-2.5-Pro.", exp: "所有定时任务均以 Gemini-2.5-Pro 模型运行。" },
+  { in: "All plugins run as Claude-3.7-Sonnet.", exp: "所有插件均以 Claude-3.7-Sonnet 模型运行。" },
+  { in: "All automations run as GPT-4o.", exp: "所有自动化任务均以 GPT-4o 模型运行。" }
+];
+for (const tc of interpolationFuzz) {
+  assert.strictEqual(engine.translate(tc.in), tc.exp, `Interpolation Fuzz failed: ${tc.in}`);
+}
+console.log('✅ [PASS] 模型动态插值变异测试通过 (3/3)');
+
+// 4. 标点与快捷键容差测试
+const toleranceFuzz = [
+  { in: "Documentation:", exp: "官方文档：" },
+  { in: "Report Issue...", exp: "报告问题..." },
+  { in: "Terminal (Ctrl+T)", exp: "终端 (Ctrl+T)" }
+];
+for (const tc of toleranceFuzz) {
+  assert.strictEqual(engine.translate(tc.in), tc.exp, `Tolerance Fuzz failed: ${tc.in}`);
+}
+console.log('✅ [PASS] 标点与快捷键容差变异测试通过 (3/3)');
+
+// 5. 模型选择器与模型规格原样保留断言 (不汉化)
+const modelSpecs = [
+  "Low",
+  "Medium",
+  "High",
+  "Fast",
+  "Limited",
+  "Limited time",
+  "Limited Time",
+  "Gemini 3.8 Flash",
+  "Claude Sonnet 4.6 (Thinking)",
+  "Claude Opus 4.6 (Thinking)",
+  "GPT-OSS 120B (Medium)"
+];
+for (const spec of modelSpecs) {
+  assert.strictEqual(engine.translate(spec), null, `Model spec should NOT be translated: ${spec}`);
+}
+console.log(`✅ [PASS] 模型选择器模型列表信息不汉化断言通过 (${modelSpecs.length}/${modelSpecs.length})`);
+
+console.log('\n🎉 [单源黄金语义与模糊测试] 全部通过！无影子副本，真理单源闭环！\n');
