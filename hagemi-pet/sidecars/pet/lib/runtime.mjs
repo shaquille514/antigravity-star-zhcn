@@ -71,6 +71,60 @@ export function clearDesktopLock(dataDir = resolvePetDirs().dataDir, pid = proce
   } catch {}
 }
 
+/**
+ * 处理渲染进程提交的设置补丁：校验并规范化 chat.baseUrl，拦截非法地址时记录日志并给出反馈提示。
+ * @param {object} params
+ * @param {object} params.settings - SettingsStore 实例。
+ * @param {object} [params.rawPatch] - 渲染端提交的局部设置补丁。
+ * @param {() => 'zhs' | 'en'} params.getLanguage - 当前界面语言获取函数。
+ * @param {() => object} params.safeSettingsForRenderer - 生成脱敏后完整设置对象的函数。
+ * @param {() => object} params.ui - 获取当前语言 UI 文案的函数。
+ * @param {object} params.bridge - 消息广播桥接对象。
+ * @param {(message: string) => void} [params.log] - 日志记录函数。
+ * @param {() => void} [params.onApplied] - 设置落盘后的附加状态同步回调。
+ */
+export function applySettingsUpdate({
+  settings,
+  rawPatch,
+  getLanguage,
+  safeSettingsForRenderer,
+  ui,
+  bridge,
+  log = () => {},
+  onApplied = () => {},
+}) {
+  const before = settings.value.language;
+  const patch = rawPatch && typeof rawPatch === 'object' ? { ...rawPatch } : {};
+  let invalidBaseUrl = false;
+  if (patch.chat && typeof patch.chat === 'object' && !Array.isArray(patch.chat)) {
+    patch.chat = { ...patch.chat };
+    if (typeof patch.chat.baseUrl === 'string') {
+      try {
+        patch.chat.baseUrl = normalizeBaseUrl(patch.chat.baseUrl);
+      } catch (error) {
+        invalidBaseUrl = true;
+        delete patch.chat.baseUrl;
+        log(`invalid chat baseUrl ignored: ${error?.message || String(error)}`);
+      }
+    }
+  }
+  settings.patch(patch);
+  onApplied();
+  if (settings.value.language !== before || patch.chat) {
+    bridge.broadcast({ t: 'settings', settings: safeSettingsForRenderer(), ui: ui() });
+  }
+  if (invalidBaseUrl) {
+    bridge.broadcast({
+      t: 'say',
+      text: getLanguage() === 'zhs'
+        ? 'API 地址无效，仅支持 HTTPS 或本机地址，已保留原设置。'
+        : 'Invalid API Base URL. Only HTTPS or loopback addresses are supported; previous setting kept.',
+      mood: 'worried',
+      force: true,
+    });
+  }
+}
+
 export function startPetRuntime({
   createBridge,
   isDesktop = false,
@@ -389,17 +443,18 @@ export function startPetRuntime({
         bridge.post(session, { t: 'art', name: message.name, data: readArt(message.name) });
         break;
       case 'settings': {
-        const before = settings.value.language;
-        const patch = message.patch ? { ...message.patch } : {};
-        if (patch.chat && typeof patch.chat.baseUrl === 'string') {
-          try { patch.chat = { ...patch.chat, baseUrl: normalizeBaseUrl(patch.chat.baseUrl) }; }
-          catch { delete patch.chat.baseUrl; }
-        }
-        settings.patch(patch);
-        if (settings.value.rivalAppWatch === false) rivalApp = null;
-        if (settings.value.language !== before || patch.chat) {
-          bridge.broadcast({ t: 'settings', settings: safeSettingsForRenderer(), ui: ui() });
-        }
+        applySettingsUpdate({
+          settings,
+          rawPatch: message.patch,
+          getLanguage: language,
+          safeSettingsForRenderer,
+          ui,
+          bridge,
+          log,
+          onApplied: () => {
+            if (settings.value.rivalAppWatch === false) rivalApp = null;
+          },
+        });
         publishFacts(true);
         break;
       }

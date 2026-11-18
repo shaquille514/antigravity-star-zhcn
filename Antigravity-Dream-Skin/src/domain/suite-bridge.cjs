@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFile, spawn } = require("node:child_process");
 const { discover } = require("../../../shared/host.cjs");
-const { activeHostContext, hagemiInstallCommand } = require("../../../shared/active-host.cjs");
+const { activeHostContext, readHagemiHostStatus, resolveHagemiInvocation } = require("../../../shared/active-host.cjs");
 
 class SuiteBridge {
   constructor(options = {}) {
@@ -24,52 +24,30 @@ class SuiteBridge {
     this.discover = options.discover || discover;
     this.execFile = options.execFile || execFile;
     this.spawn = options.spawn || spawn;
+    this.activeHostContext = options.activeHostContext || activeHostContext;
+    this.onWarning = typeof options.onWarning === "function" ? options.onWarning : (msg => console.warn("[SuiteBridge]", msg));
   }
 
   /**
-   * 检测哈基米桌面漂浮版与原生 Sidecar 插件状态。
+   * 检测哈基米桌面漂浮版与原生 Sidecar 插件状态（内部已安全兜底 WSL 探测异常）。
    */
   getHagemiStatus() {
-    const configDir = activeHostContext(this.geminiConfigDir).configDir;
-    const geminiDir = this.geminiDir || path.dirname(configDir);
-    const desktopLockFile = this.hagemiDesktopLockFile || path.join(geminiDir, "antigravity", "sidecar_data", "hagemi-pet-agy", "pet", "data", "desktop.lock.json");
-    const hagemiAvailable = fs.existsSync(this.hagemiInstallScript);
-    const hagemiDesktopAvailable = fs.existsSync(this.hagemiDesktopMainPath);
-    let hagemiDesktopRunning = false;
-    try {
-      if (fs.existsSync(desktopLockFile)) {
-        const lock = JSON.parse(fs.readFileSync(desktopLockFile, "utf8").replace(/^\uFEFF/, ""));
-        const pid = Number(lock?.pid);
-        if (Number.isInteger(pid) && pid > 0) {
-          try {
-            process.kill(pid, 0);
-            hagemiDesktopRunning = true;
-          } catch (error) {
-            if (error?.code === "EPERM") hagemiDesktopRunning = true;
-          }
-        }
-      }
-    } catch {}
-
-    const pluginManifest = path.join(configDir, "plugins", "hagemi-pet-agy", "plugin.json");
-    const hagemiInstalled = fs.existsSync(pluginManifest);
-    let hagemiEnabled = hagemiInstalled;
-    if (hagemiInstalled) {
-      try {
-        const configPath = path.join(configDir, "config.json");
-        if (fs.existsSync(configPath)) {
-          const config = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/, ""));
-          const pluginEnabled = config?.plugins?.["hagemi-pet-agy"]?.enabled;
-          const sidecarEnabled = config?.sidecars?.["hagemi-pet-agy/pet"]?.enabled;
-          if (pluginEnabled === false || sidecarEnabled === false) {
-            hagemiEnabled = false;
-          }
-        }
-      } catch {
-        // 配置文件不可读时保守保留安装检测结果
-      }
-    }
-    return { hagemiAvailable, hagemiDesktopAvailable, hagemiDesktopRunning, hagemiInstalled, hagemiEnabled };
+    const status = readHagemiHostStatus({
+      configDir: this.geminiConfigDir,
+      geminiDir: this.geminiDir,
+      lockFile: this.hagemiDesktopLockFile,
+      installScriptPath: this.hagemiInstallScript,
+      desktopMainPath: this.hagemiDesktopMainPath,
+      onWarning: this.onWarning,
+      hostContextOptions: { resolveHostContext: this.activeHostContext }
+    });
+    return {
+      hagemiAvailable: status.available,
+      hagemiDesktopAvailable: status.desktopAvailable,
+      hagemiDesktopRunning: status.desktopRunning,
+      hagemiInstalled: status.installed,
+      hagemiEnabled: status.enabled
+    };
   }
 
   _loadCli() {
@@ -142,7 +120,16 @@ class SuiteBridge {
     if (!fs.existsSync(this.hagemiInstallScript)) {
       return Promise.resolve({ ok: false, message: "未找到 hagemi-pet/tools/install-local.mjs 模块", output: "" });
     }
-    const invocation = hagemiInstallCommand(this.rootDir, activeHostContext(this.geminiConfigDir), action);
+    const resolved = resolveHagemiInvocation({
+      rootDir: this.rootDir,
+      action,
+      configOverride: this.geminiConfigDir,
+      resolveHostContext: this.activeHostContext
+    });
+    if (!resolved.ok) {
+      return Promise.resolve({ ok: false, message: resolved.message, output: "" });
+    }
+    const { invocation } = resolved;
     const env = {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1"

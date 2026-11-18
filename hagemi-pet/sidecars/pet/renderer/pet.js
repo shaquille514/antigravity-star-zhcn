@@ -372,14 +372,44 @@ HAGEMI.boot = async function boot(send, options = {}) {
       send({ type: 'desktop_hit', hit: nextHit });
     }
   }
+  /**
+   * 同步独立桌面窗口的焦点状态：在菜单、设置面板或聊天框展开时允许聚焦，以便点击透明区外部或按下 Esc 正常失焦关闭。
+   */
   function syncDesktopFocus(explicit = null) {
     if (!options.desktop) return;
     const hidden = stage.style.display === 'none';
-    const nextFocused = hidden ? false : (explicit !== null ? !!explicit : (panel.classList.contains('show') || chatBox.classList.contains('show')));
+    const nextFocused = hidden ? false : (explicit !== null ? !!explicit : (panel.classList.contains('show') || chatBox.classList.contains('show') || menu.classList.contains('show')));
     if (nextFocused !== desktopFocused) {
       desktopFocused = nextFocused;
       send({ type: 'desktop_focus', focused: nextFocused });
     }
+  }
+  /**
+   * 统一同步桌面焦点与穿透命中区，保证交互浮层切换时状态一致。
+   */
+  function syncDesktopOverlayState() {
+    syncDesktopFocus();
+    syncDesktopHit();
+  }
+  /**
+   * 一次性收起所有交互浮层后再同步焦点与命中区，避免逐个关闭时产生焦点回弹竞态。
+   */
+  function closeAllOverlays(explicitFocus = null) {
+    chatState.open = false;
+    chatBox.classList.remove('show');
+    panel.classList.remove('show');
+    menu.classList.remove('show');
+    syncDesktopFocus(explicitFocus);
+    syncDesktopHit();
+  }
+  /**
+   * 执行菜单项动作：先移除菜单显隐类，待目标浮层（如设置面板或聊天框）完成展开后再统一同步焦点与命中区，
+   * 避免先触发 desktop_focus:false 再立即 desktop_focus:true 导致异步 desktop_blur 误关闭新浮层。
+   */
+  function runMenuAction(action) {
+    menu.classList.remove('show');
+    action();
+    syncDesktopOverlayState();
   }
 
   function openMenu(px, py) {
@@ -392,7 +422,7 @@ HAGEMI.boot = async function boot(send, options = {}) {
       button.type = 'button';
       button.setAttribute('role', 'menuitem');
       button.textContent = (checked ? '✓ ' : '') + label;
-      button.addEventListener('click', () => { closeMenu(); action(); });
+      button.addEventListener('click', () => runMenuAction(action));
     };
     const divider = () => make('div', 'divider', menu);
     item(ui.chat_menu || '💬 Ask Hagemi (Double right-click)', () => openChat());
@@ -424,15 +454,25 @@ HAGEMI.boot = async function boot(send, options = {}) {
     const width = menu.offsetWidth, height = menu.offsetHeight;
     menu.style.transform = `translate3d(${clamp(px, 6, viewW() - width - 6)}px, ${clamp(py, 6, viewH() - height - 6)}px, 0)`;
     syncDesktopHit(px, py, true);
+    syncDesktopFocus(true);
   }
-  function closeMenu() { menu.classList.remove('show'); syncDesktopHit(); }
+  function closeMenu() { menu.classList.remove('show'); syncDesktopOverlayState(); }
   // A closed shadow root hides its insides from the window, so clicks are told apart in two places:
   // the window only sees clicks elsewhere in the app, and the root sees which of her parts was hit.
-  listen(window, 'pointerdown', event => { if (!event.composedPath().includes(host)) { closeMenu(); closePanel(); } }, { capture: true });
+  listen(window, 'pointerdown', event => {
+    if (!event.composedPath().includes(host) && (menu.classList.contains('show') || panel.classList.contains('show'))) {
+      menu.classList.remove('show');
+      panel.classList.remove('show');
+      syncDesktopOverlayState();
+    }
+  }, { capture: true });
   listen(root, 'pointerdown', event => {
     const path = event.composedPath();
-    if (!path.includes(menu)) closeMenu();
-    if (!path.includes(panel) && !path.includes(menu)) closePanel();
+    const hideMenu = !path.includes(menu) && menu.classList.contains('show');
+    const hidePanel = !path.includes(panel) && !path.includes(menu) && panel.classList.contains('show');
+    if (hideMenu) menu.classList.remove('show');
+    if (hidePanel) panel.classList.remove('show');
+    if (hideMenu || hidePanel) syncDesktopOverlayState();
   }, { capture: true });
 
   // Settings live on the pet: the app offers plugins no way to open a pane on demand.
@@ -595,7 +635,7 @@ HAGEMI.boot = async function boot(send, options = {}) {
     syncDesktopFocus(true);
     send({ type: 'panelOpened' });
   }
-  function closePanel() { panel.classList.remove('show'); syncDesktopFocus(); syncDesktopHit(); }
+  function closePanel() { panel.classList.remove('show'); syncDesktopOverlayState(); }
   // Typing in the form must not reach the app's keyboard shortcuts or composer.
   for (const type of ['keydown', 'keyup', 'keypress']) listen(panel, type, event => { event.stopPropagation(); if (event.key === 'Escape') closePanel(); });
 
@@ -661,10 +701,10 @@ HAGEMI.boot = async function boot(send, options = {}) {
   function openChat() {
     clearTimeout(hoverTimer);
     hideHud();
-    closeMenu();
-    closePanel();
     chatState.open = true;
     chatBox.classList.add('show');
+    menu.classList.remove('show');
+    panel.classList.remove('show');
     renderChat();
     syncDesktopHit(pointerX, pointerY, true);
     syncDesktopFocus(true);
@@ -675,8 +715,7 @@ HAGEMI.boot = async function boot(send, options = {}) {
   function closeChat() {
     chatState.open = false;
     chatBox.classList.remove('show');
-    syncDesktopFocus();
-    syncDesktopHit();
+    syncDesktopOverlayState();
   }
 
   function submitChat() {
@@ -726,8 +765,22 @@ HAGEMI.boot = async function boot(send, options = {}) {
     event.stopPropagation();
   });
 
+  /**
+   * 浅合并设置补丁，仅在传入嵌套配置对象时安全展开 ai、chat、quota，保留已有子字段。
+   */
+  function mergeSettings(base, change) {
+    if (!change || typeof change !== 'object') return base;
+    const next = { ...base, ...change };
+    for (const key of ['ai', 'chat', 'quota']) {
+      if (change[key] && typeof change[key] === 'object' && !Array.isArray(change[key])) {
+        next[key] = { ...base[key], ...change[key] };
+      }
+    }
+    return next;
+  }
+
   function patch(change) {
-    settings = { ...settings, ...change, ai: { ...settings.ai, ...change.ai } };
+    settings = mergeSettings(settings, change);
     applyVisibility();
     applySize();
     send({ type: 'settings', patch: change });
@@ -737,12 +790,9 @@ HAGEMI.boot = async function boot(send, options = {}) {
     stage.style.display = hidden ? 'none' : 'block';
     if (hidden) {
       closeBubble();
-      closeChat();
-      closeMenu();
-      closePanel();
+      closeAllOverlays(false);
       hideHud();
       syncDesktopHit(0, 0, false);
-      syncDesktopFocus(false);
     } else {
       syncDesktopHit();
     }
@@ -912,11 +962,14 @@ HAGEMI.boot = async function boot(send, options = {}) {
   listen(window, 'blur', () => {
     if (options.desktop) {
       desktopFocused = false;
-      closeMenu();
+      closeAllOverlays(false);
     }
   });
   // Only the time of the keystroke is ever used; the key itself is never read.
   listen(window, 'keydown', () => { lastKeyAt = performance.now(); }, { passive: true, capture: true });
+  listen(window, 'keydown', event => {
+    if (event.key === 'Escape' && menu.classList.contains('show')) closeMenu();
+  });
   listen(window, 'resize', () => { applySize(); settle(); }, { passive: true });
 
   // Tell the sidecar when nobody is looking, so she does not spend tokens on an empty room.
@@ -1066,14 +1119,14 @@ HAGEMI.boot = async function boot(send, options = {}) {
     lastMessageAt = performance.now();
     switch (message.t) {
       case 'hello':
-        settings = { ...settings, ...message.settings };
+        settings = mergeSettings(settings, message.settings);
         ui = message.ui || ui;
         applySize();
         placeInitial();
         applyVisibility();
         break;
       case 'settings':
-        settings = { ...settings, ...message.settings };
+        settings = mergeSettings(settings, message.settings);
         ui = message.ui || ui;
         if (panel.classList.contains('show')) { const scroll = panel.scrollTop; openPanel(); panel.scrollTop = scroll; }
         if (chatBox.classList.contains('show')) renderChat();
@@ -1168,10 +1221,7 @@ HAGEMI.boot = async function boot(send, options = {}) {
         leave();
         break;
       case 'desktop_blur':
-        closeChat();
-        closePanel();
-        closeMenu();
-        syncDesktopFocus(false);
+        closeAllOverlays(false);
         break;
       case 'open_chat':
         if (settings.hidden || (settings.hiddenUntil && Date.now() < settings.hiddenUntil)) {

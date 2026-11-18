@@ -130,3 +130,50 @@ test("SuiteBridge reports desktop floating Hagemi state and launches desktop mod
   assert.equal(spawned.length, 1);
   assert.equal(spawned[0].args.at(-1), "hagemi");
 });
+
+test("SuiteBridge.getStatus degrades safely when WSL/activeHostContext fails", async () => {
+  const warnings = [];
+  const bridge = new SuiteBridge({
+    discover: async () => null,
+    activeHostContext: () => {
+      throw new Error("wsl.exe timed out");
+    },
+    onWarning: msg => warnings.push(msg)
+  });
+  bridge._loadCli = () => null;
+
+  const status = await bridge.getStatus();
+  assert.equal(typeof status.hagemiAvailable, "boolean");
+  assert.equal(typeof status.hagemiDesktopAvailable, "boolean");
+  assert.equal(typeof status.hagemiDesktopRunning, "boolean");
+  assert.equal(typeof status.hagemiInstalled, "boolean");
+  assert.equal(typeof status.hagemiEnabled, "boolean");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /wsl\.exe timed out/);
+});
+
+test("SuiteBridge.runHagemi returns friendly error without crashing when WSL/activeHostContext fails", async () => {
+  let execCalled = false;
+  const bridge = new SuiteBridge({
+    discover: async () => null,
+    activeHostContext: () => {
+      throw new Error("残余的 Ubuntu-22.04 已卸载");
+    },
+    onWarning: () => {},
+    execFile: () => {
+      execCalled = true;
+    }
+  });
+
+  const installRes = await bridge.runHagemi("install");
+  assert.equal(installRes.ok, false);
+  assert.equal(installRes.output, "");
+  assert.match(installRes.message, /WSL 环境探测失败: 残余的 Ubuntu-22\.04 已卸载/);
+  assert.equal(execCalled, false);
+
+  const uninstallRes = await bridge.runHagemi("uninstall");
+  assert.equal(uninstallRes.ok, false);
+  assert.equal(uninstallRes.output, "");
+  assert.match(uninstallRes.message, /WSL 环境探测失败: 残余的 Ubuntu-22\.04 已卸载/);
+  assert.equal(execCalled, false);
+});

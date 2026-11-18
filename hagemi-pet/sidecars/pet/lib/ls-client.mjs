@@ -11,6 +11,38 @@ import { fileURLToPath } from 'node:url';
 
 const exec = promisify(execFile);
 const SERVICE = '/exa.language_server_pb.LanguageServerService/';
+const DEFAULT_DISCOVER_BACKOFF_MS = [5000, 10000, 20000, 30000];
+const INVALIDATING_ERROR_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT']);
+
+/**
+ * 构造带有 ETIMEDOUT 错误码的请求超时异常，供上层识别并清理失效端点缓存。
+ * @param {string} method 调用的 LanguageServer 方法名。
+ * @returns {Error} 携带 code='ETIMEDOUT' 的 Error 实例。
+ */
+function createTimeoutError(method) {
+  const error = new Error(`${method} timed out`);
+  error.code = 'ETIMEDOUT';
+  return error;
+}
+
+/**
+ * 判断错误是否意味着缓存的 LanguageServer 端点已失效（鉴权过期、连接拒绝/重置或请求超时）。
+ * @param {unknown} error 请求抛出的异常对象。
+ * @returns {boolean} 是否需要清除本地端点缓存。
+ */
+function isEndpointInvalidatingError(error) {
+  return Boolean(error && (error.status === 401 || INVALIDATING_ERROR_CODES.has(error.code)));
+}
+
+/**
+ * 规范化探测退避序列配置。
+ * @param {number[] | undefined} backoffMs 自定义退避毫秒序列。
+ * @returns {number[]} 有效的退避时间序列。
+ */
+function normalizeBackoff(backoffMs) {
+  if (Array.isArray(backoffMs)) return backoffMs.map(ms => Math.max(0, Number(ms) || 0));
+  return DEFAULT_DISCOVER_BACKOFF_MS;
+}
 
 function post(host, port, csrf, method, body, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -33,7 +65,7 @@ function post(host, port, csrf, method, body, timeoutMs) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(timeoutMs, () => req.destroy(new Error(`${method} timed out`)));
+    req.setTimeout(timeoutMs, () => req.destroy(createTimeoutError(method)));
     req.end(data);
   });
 }
@@ -86,11 +118,31 @@ async function discover() {
 }
 
 export class LanguageServer {
-  constructor({ env = process.env, discoverFn = discover, transport = post } = {}) {
+  /**
+   * 创建 LanguageServer 客户端实例。
+   * @param {object} [options] 客户端配置项。
+   * @param {NodeJS.ProcessEnv} [options.env=process.env] 环境变量对象。
+   * @param {Function} [options.discoverFn=discover] 本地进程端点探测函数。
+   * @param {Function} [options.transport=post] HTTP 请求发送函数。
+   * @param {() => number} [options.now=Date.now] 当前时间戳读取函数（支持测试注入虚拟时钟）。
+   * @param {number[]} [options.discoverBackoffMs] 探测失败后的递增退避毫秒序列。
+   */
+  constructor({
+    env = process.env,
+    discoverFn = discover,
+    transport = post,
+    now = Date.now,
+    discoverBackoffMs,
+  } = {}) {
     this.transport = transport;
     this.discoverFn = discoverFn;
+    this.now = typeof now === 'function' ? now : Date.now;
+    this.discoverBackoffMs = normalizeBackoff(discoverBackoffMs);
     this.endpoint = null;
     this.discoveryPromise = null;
+    this.discoverFailures = 0;
+    this.discoverRetryAt = 0;
+    this.lastDiscoverError = null;
     const address = env.ANTIGRAVITY_LS_ADDRESS, csrf = env.ANTIGRAVITY_CSRF_TOKEN;
     if (address && csrf) {
       const index = address.lastIndexOf(':');
@@ -99,17 +151,71 @@ export class LanguageServer {
     }
   }
 
-  async call(method, body = {}, timeoutMs = 12000) {
-    if (!this.endpoint) {
-      this.discoveryPromise ||= this.discoverFn().finally(() => { this.discoveryPromise = null; });
-      this.endpoint = await this.discoveryPromise;
-    }
+  /**
+   * 根据连续探测失败次数返回本次冷却退避时长（毫秒）。
+   * @returns {number} 退避等待毫秒数。
+   */
+  nextBackoffMs() {
+    if (!this.discoverBackoffMs.length) return 0;
+    const index = Math.min(this.discoverFailures, this.discoverBackoffMs.length - 1);
+    return this.discoverBackoffMs[index];
+  }
+
+  /**
+   * 执行单次端点探测并更新退避状态；成功时立即清零退避计数与冷却窗口。
+   * @returns {Promise<{host: string, port: number, csrf: string}>} 探测到的端点信息。
+   */
+  async runDiscovery() {
     try {
-      return await this.transport(this.endpoint.host, this.endpoint.port, this.endpoint.csrf, method, body, timeoutMs);
+      const endpoint = await this.discoverFn();
+      this.endpoint = endpoint;
+      this.discoverFailures = 0;
+      this.discoverRetryAt = 0;
+      this.lastDiscoverError = null;
+      return endpoint;
+    } catch (error) {
+      const discoverError = error instanceof Error ? error : new Error(String(error));
+      const delayMs = this.nextBackoffMs();
+      this.discoverFailures += 1;
+      this.discoverRetryAt = this.now() + delayMs;
+      this.lastDiscoverError = discoverError;
+      throw discoverError;
+    }
+  }
+
+  /**
+   * 获取缓存端点或在非冷却期内触发探测；并发请求共享同一次探测 Promise。
+   * @returns {Promise<{host: string, port: number, csrf: string}>} 可用的端点信息。
+   */
+  async ensureEndpoint() {
+    if (this.endpoint) return this.endpoint;
+    if (!this.discoveryPromise) {
+      // 处于失败退避冷却期内直接快速失败，避免轮询周期反复冷启动 powershell.exe / wsl.exe 子进程。
+      if ((this.discoverFailures > 0 || this.discoverRetryAt > 0) && this.now() < this.discoverRetryAt) {
+        throw this.lastDiscoverError || new Error('Antigravity is not running');
+      }
+      this.discoveryPromise = this.runDiscovery().finally(() => {
+        this.discoveryPromise = null;
+      });
+    }
+    return await this.discoveryPromise;
+  }
+
+  /**
+   * 调用 LanguageServer 指定方法并在端点失效（含超时）时清理本地缓存。
+   * @param {string} method RPC 方法名。
+   * @param {object} [body={}] 请求体对象。
+   * @param {number} [timeoutMs=12000] 请求超时时间（毫秒）。
+   * @returns {Promise<any>} 服务端返回的 JSON 对象。
+   */
+  async call(method, body = {}, timeoutMs = 12000) {
+    const endpoint = await this.ensureEndpoint();
+    try {
+      return await this.transport(endpoint.host, endpoint.port, endpoint.csrf, method, body, timeoutMs);
     } catch (error) {
       // A language server restart invalidates both the port and the token. The host restarts
       // sidecars when that happens; in dev mode, look again next time.
-      if (!this.fromHost && (error.status === 401 || error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET')) this.endpoint = null;
+      if (!this.fromHost && isEndpointInvalidatingError(error)) this.endpoint = null;
       throw error;
     }
   }

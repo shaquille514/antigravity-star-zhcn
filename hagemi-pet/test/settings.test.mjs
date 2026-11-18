@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { applySettingsUpdate } from '../sidecars/pet/lib/runtime.mjs';
 import { DEFAULTS, sanitize, SettingsStore } from '../sidecars/pet/lib/settings.mjs';
 
 test('defaults match the promises in the README', () => {
@@ -89,4 +90,56 @@ test('docking is remembered with the position', () => {
   const value = sanitize({ position: { x: 0, y: 0.5, dock: 'left' } });
   assert.equal(value.position.dock, 'left');
   assert.equal(sanitize({ position: { x: 0, y: 0.5, dock: 'sideways' } }).position.dock, undefined);
+});
+
+test('runtime 拦截无效 chat.baseUrl 时记录日志、保留原设置并向用户气泡反馈', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'hagemi-runtime-settings-')), 'settings.json');
+  const store = new SettingsStore(file);
+  store.patch({ chat: { baseUrl: 'https://valid.example.com/v1' } });
+
+  const broadcasts = [];
+  const logs = [];
+  let lang = 'zhs';
+  const invoke = rawPatch => applySettingsUpdate({
+    settings: store,
+    rawPatch,
+    getLanguage: () => lang,
+    safeSettingsForRenderer: () => ({ ...store.value, chat: { ...store.value.chat, apiKey: '' } }),
+    ui: () => ({ lang }),
+    bridge: { broadcast: msg => broadcasts.push(msg) },
+    log: msg => logs.push(msg),
+  });
+
+  // 1. 中文界面下提交非本机 HTTP 地址：应记录日志、忽略 baseUrl、应用合法字段、回推完整设置与中文提示气泡
+  invoke({ chat: { mode: 'api', baseUrl: 'http://remote-insecure.example.com/v1' } });
+  assert.equal(store.value.chat.baseUrl, 'https://valid.example.com/v1');
+  assert.equal(store.value.chat.mode, 'api');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^invalid chat baseUrl ignored:/);
+  assert.equal(broadcasts.find(m => m.t === 'settings')?.settings.chat.baseUrl, 'https://valid.example.com/v1');
+  const zhSay = broadcasts.find(m => m.t === 'say');
+  assert.equal(zhSay?.mood, 'worried');
+  assert.equal(zhSay?.force, true);
+  assert.match(zhSay?.text || '', /API 地址无效/);
+
+  // 2. 英文界面下提交非法格式 URL：应回推英文提示气泡
+  broadcasts.length = 0;
+  logs.length = 0;
+  lang = 'en';
+  invoke({ chat: { baseUrl: 'not a url' } });
+  assert.equal(store.value.chat.baseUrl, 'https://valid.example.com/v1');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^invalid chat baseUrl ignored:/);
+  const enSay = broadcasts.find(m => m.t === 'say');
+  assert.equal(enSay?.mood, 'worried');
+  assert.equal(enSay?.force, true);
+  assert.match(enSay?.text || '', /Invalid API Base URL/);
+
+  // 3. 提交合法 HTTPS 地址（含尾斜杠）：应规范化且无错误日志与警告气泡
+  broadcasts.length = 0;
+  logs.length = 0;
+  invoke({ chat: { baseUrl: 'https://proxy.example.com/v1/' } });
+  assert.equal(store.value.chat.baseUrl, 'https://proxy.example.com/v1');
+  assert.equal(logs.length, 0);
+  assert.equal(broadcasts.some(m => m.t === 'say'), false);
 });

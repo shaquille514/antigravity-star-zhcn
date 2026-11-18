@@ -9,7 +9,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const { discover } = require("./shared/host.cjs");
-const { activeHostContext, hagemiInstallCommand } = require("./shared/active-host.cjs");
+const { readHagemiHostStatus, resolveHagemiInvocation } = require("./shared/active-host.cjs");
 
 const ROOT_DIR = __dirname;
 const LOCALIZATION_DIR = path.join(ROOT_DIR, "localization");
@@ -23,55 +23,22 @@ const FOREGROUND_EXE = path.join(ROOT_DIR, "Antigravity-Cat-Widget", "src", "nat
 const HOST_CONNECT_EXE = path.join(ROOT_DIR, "tools", "native", "HostConnect.exe");
 
 /**
- * 读取本地桌面漂浮版与 Sidecar 插件状态。
+ * 读取本地桌面漂浮版与 Sidecar 插件状态（内部已安全兜底 WSL 探测异常）。
  */
 function getHagemiStatus() {
-  const configDir = activeHostContext().configDir;
-  const geminiDir = path.dirname(configDir);
-  const lockFile = path.join(geminiDir, "antigravity", "sidecar_data", "hagemi-pet-agy", "pet", "data", "desktop.lock.json");
-  let desktopRunning = false;
-  let desktopPid = null;
-  try {
-    if (fs.existsSync(lockFile)) {
-      const lock = JSON.parse(fs.readFileSync(lockFile, "utf8").replace(/^\uFEFF/, ""));
-      const pid = Number(lock?.pid);
-      if (Number.isInteger(pid) && pid > 0) {
-        try {
-          process.kill(pid, 0);
-          desktopRunning = true;
-          desktopPid = pid;
-        } catch (err) {
-          if (err?.code === "EPERM") {
-            desktopRunning = true;
-            desktopPid = pid;
-          }
-        }
-      }
-    }
-  } catch {}
-
-  const pluginDir = path.join(configDir, "plugins", "hagemi-pet-agy");
-  const installed = fs.existsSync(path.join(pluginDir, "plugin.json"));
-  let enabled = installed;
-  if (installed) {
-    try {
-      const cfgPath = path.join(configDir, "config.json");
-      if (fs.existsSync(cfgPath)) {
-        const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8").replace(/^\uFEFF/, ""));
-        if (cfg?.plugins?.["hagemi-pet-agy"]?.enabled === false || cfg?.sidecars?.["hagemi-pet-agy/pet"]?.enabled === false) {
-          enabled = false;
-        }
-      }
-    } catch {}
-  }
+  const status = readHagemiHostStatus({
+    installScriptPath: HAGEMI_INSTALL_SCRIPT,
+    desktopMainPath: HAGEMI_DESKTOP_MAIN,
+    onWarning: msg => console.warn(`⚠️ ${msg}`)
+  });
   return {
-    available: fs.existsSync(HAGEMI_INSTALL_SCRIPT),
-    desktopAvailable: fs.existsSync(HAGEMI_DESKTOP_MAIN),
-    desktopRunning,
-    desktopPid,
-    installed,
-    enabled,
-    pluginDir
+    available: status.available,
+    desktopAvailable: status.desktopAvailable,
+    desktopRunning: status.desktopRunning,
+    desktopPid: status.desktopPid,
+    installed: status.installed,
+    enabled: status.enabled,
+    pluginDir: status.pluginDir
   };
 }
 
@@ -116,8 +83,15 @@ function manageHagemi(action = "desktop") {
     console.error("❌ 未找到 hagemi-pet/tools/install-local.mjs");
     return 1;
   }
-  const invocation = hagemiInstallCommand(ROOT_DIR, activeHostContext(), action);
-  const res = spawnSync(invocation.command, invocation.args, { cwd: HAGEMI_DIR, stdio: "inherit", env: process.env, windowsHide: true });
+  const resolved = resolveHagemiInvocation({
+    rootDir: ROOT_DIR,
+    action
+  });
+  if (!resolved.ok) {
+    console.error(`❌ ${resolved.message}`);
+    return 1;
+  }
+  const res = spawnSync(resolved.invocation.command, resolved.invocation.args, { cwd: HAGEMI_DIR, stdio: "inherit", env: process.env, windowsHide: true });
   return res.status ?? 1;
 }
 
