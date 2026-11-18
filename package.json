@@ -1,6 +1,6 @@
 {
   "name": "antigravity-star-zhcn-suite",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Antigravity 中文融合套件：桌面哈基米、气泡对话、个性人设、Cherry/Claude/Codex 吃醋、Dream Skin 与 Windows/WSL 桥接",
   "scripts": {
@@ -27,7 +27,8 @@
     "test": "npm run test:suite && npm run test:hagemi && npm run test:i18n",
     "verify:runtime": "node tools/verify-runtime.cjs",
     "verify:installers": "node tools/verify-installers.cjs",
-    "verify:connection": "node tools/verify-connection-port.cjs"
+    "verify:connection": "node tools/verify-connection-port.cjs",
+    "verify:asar-lock": "node tools/verify-asar-unlocked.cjs"
   },
   "devDependencies": {
     "electron": "45.1.0",

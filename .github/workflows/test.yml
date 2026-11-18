@@ -12,7 +12,7 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      ELECTRON_SKIP_BINARY_DOWNLOAD: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,3 +24,5 @@ jobs:
       - if: runner.os == 'Windows'
         run: npm run build:native
       - run: npm test
+      - if: runner.os == 'Windows'
+        run: npm run verify:asar-lock

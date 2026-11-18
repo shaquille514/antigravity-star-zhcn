@@ -1,3 +1,7 @@
+# 1.0.1 更新锁修复 / 2026-11-18
+
+Windows Restart Manager 确认 1.0.0 的 Dream Skin 面板持有宿主 ASAR 句柄。正常退出面板后，官方安装包成功将 App 2.32.2 升级至 2.33.0。`original-fs` 修复经过真实 Electron 临时归档回归：修复前 `EBUSY`、修复后状态读取准确且面板进程存活时仍可重命名归档。完整 `npm test` 通过。此更新不把旧汉化补丁自动套入新版实际客户端。
+
 # 融合版验证 / 2026-11-18
 
 范围：Windows x64、本机 Antigravity App 2.32.2、Ubuntu WSL，会话桥接和桌面哈基米。发布副本的最终测试结果以本提交 GitHub Actions 和 `docs/maintenance/2026-11-18-integrated-release.md` 为准。

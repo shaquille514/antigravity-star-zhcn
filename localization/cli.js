@@ -5,7 +5,9 @@
  * Cross-platform patcher and lifecycle manager (Windows / macOS / Linux)
  */
 
-const fs = require('fs');
+// Status checks may run inside the Electron control panel. Bypass ASAR caching so
+// the official updater can replace the host archive while the panel stays open.
+const fs = require(process.versions?.electron ? 'original-fs' : 'fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');

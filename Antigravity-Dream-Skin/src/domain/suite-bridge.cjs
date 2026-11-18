@@ -1,4 +1,5 @@
-const fs = require("node:fs");
+// Treat the host ASAR as a regular file; Electron's archive cache otherwise pins it.
+const fs = require(process.versions?.electron ? "original-fs" : "node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile, spawn } = require("node:child_process");
